@@ -1,0 +1,23 @@
+# Python 生成的文件
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+wheels/
+*.egg-info
+
+# 虚拟环境
+.venv
+
+# 本机配置和秘密
+.env
+.env.*
+!.env.example
+
+# Agent 运行数据
+.workstation-agent/
