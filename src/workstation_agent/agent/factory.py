@@ -6,17 +6,28 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
+from .rag_guard import RagSearchGuard
+
 
 def build_agent(
-    model: BaseChatModel, tools: list[BaseTool], *, max_model_calls: int = 8,
+    model: BaseChatModel,
+    tools: list[BaseTool],
+    *,
+    max_model_calls: int = 8,
     max_tool_calls: int = 32,
+    max_search_calls: int = 6,
 ) -> CompiledStateGraph:
     """创建模型与工具调用流程，并限制调用次数。"""
     return create_agent(
-        model=model, tools=tools,
+        model=model,
+        tools=tools,
         middleware=[
             ModelCallLimitMiddleware(run_limit=max_model_calls, exit_behavior="error"),
             ToolCallLimitMiddleware(run_limit=max_tool_calls, exit_behavior="error"),
+            ToolCallLimitMiddleware(
+                tool_name="search_documents", run_limit=max_search_calls, exit_behavior="error"
+            ),
+            RagSearchGuard(),
         ],
         name="workstation_agent",
     ).with_config(recursion_limit=max_model_calls * 10 + 10)

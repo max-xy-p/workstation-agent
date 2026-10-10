@@ -9,10 +9,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .rag.config import RagSettings
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
     """保存 Agent 和本机工具服务的运行配置。"""
+
     # 文件工具允许访问的根目录。
     workspace: Path
     # 单次任务的模型调用次数上限。
@@ -37,10 +40,27 @@ class Settings:
     # 本机工具服务的认证令牌，打印配置对象时隐藏。
     service_token: str | None = field(default=None, repr=False)
 
+    # RAG 模型与资源预算，默认不向外发送文档。
+    rag: RagSettings = field(default_factory=RagSettings)
+
+    @property
+    def rag_database_path(self) -> Path:
+        """RAG 索引路径必须解析到工作区内。"""
+        path = self.database_path.with_name("rag.db").resolve()
+        if not path.is_relative_to(self.workspace.resolve()):
+            raise ValueError("RAG 数据目录必须位于工作区内")
+        return path
+
     def __post_init__(self) -> None:
         endpoint = urlparse(self.model_base_url)
-        if (endpoint.scheme not in {"http", "https"} or not endpoint.hostname
-                or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
+        if (
+            endpoint.scheme not in {"http", "https"}
+            or not endpoint.hostname
+            or endpoint.username
+            or endpoint.password
+            or endpoint.query
+            or endpoint.fragment
+        ):
             raise ValueError("模型 base_url 必须为不含凭据、查询和片段的 HTTP 地址")
         if not math.isfinite(self.model_timeout) or self.model_timeout <= 0:
             raise ValueError("模型超时必须为正数")
@@ -94,11 +114,16 @@ class Settings:
         except ValueError:
             raise ValueError("模型超时或工具调用上限配置无效") from None
         return cls(
-            workspace=workspace, max_steps=max_steps, model=model, data_dir=data_dir,
+            workspace=workspace,
+            max_steps=max_steps,
+            model=model,
+            data_dir=data_dir,
             tool_output_chars=tool_output_chars,
             api_key=os.getenv("WORKSTATION_AGENT_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
             model_base_url=os.getenv("WORKSTATION_AGENT_BASE_URL", "https://api.openai.com/v1"),
-            model_timeout=model_timeout, max_tool_calls=max_tool_calls,
+            model_timeout=model_timeout,
+            max_tool_calls=max_tool_calls,
             service_port=service_port,
             service_token=os.getenv("WORKSTATION_AGENT_SERVICE_TOKEN") or None,
+            rag=RagSettings.from_env(),
         )

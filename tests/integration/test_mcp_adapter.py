@@ -42,7 +42,7 @@ class MCPAdapterTests(unittest.IsolatedAsyncioTestCase):
                 original = next(t for t in application.tool_catalog() if t["name"] == tool.name)
                 self.assertEqual(tool.input_schema, original["parameters"])
                 self.assertEqual(tool.output_schema, TypeAdapter(ToolResult).json_schema())
-                self.assertTrue(tool.annotations.read_only_hint)
+                self.assertEqual(tool.annotations.read_only_hint, original["permission"] == "SAFE_READ")
             result = await client.call_tool("read_text_file", {})
             self.assertTrue(result.is_error)
             self.assertEqual(result.structured_content["error_code"], "invalid_arguments")

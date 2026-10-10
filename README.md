@@ -34,6 +34,17 @@ uv run workstation-agent serve
 内置目录列举和 UTF-8 文件读取，工具路径受工作区限制。`serve` 前台启动需要服务令牌。
 默认地址 `http://127.0.0.1:8765/mcp`。详细说明见[工具模块](docs/tools.md)与[本机服务](docs/local-service.md)。
 
+## 文档检索
+
+~~~powershell
+uv run workstation-agent rag ingest docs/tools.md --approve-write
+uv run workstation-agent rag search "工具权限检查"
+uv run workstation-agent rag status
+~~~
+
+默认离线 BM25；配置模型后支持上下文增强、向量混合召回和重排。
+使用和配置见 [RAG 文档](docs/rag.md)，总体方案见 [设计与待定事项](docs/rag-design.md)。
+
 ## 配置与边界
 
 环境变量示例见 [.env.example](.env.example)，项目不会自动读取 `.env`。
@@ -41,7 +52,8 @@ uv run workstation-agent serve
 API key 从 `WORKSTATION_AGENT_API_KEY` 读取，也可使用 `OPENAI_API_KEY`。
 默认模型调用上限 8、工具调用上限 32、请求超时 30 秒。
 
-当前交付是官方 Agent 的单次任务和只读工具链；Memory/RAG 为内存基线，持久化会话、审批恢复和用户界面待逐模块交付。
+当前提供官方 Agent 单次任务、文件只读工具及 RAG 文档摄取与检索。
+Memory 持久化、会话恢复、审批恢复和用户界面待逐模块交付。
 HTTP 集成测试使用本机兼容接口夹具，外部模型实际效果需要使用自己的服务配置验收。
 
 ## 开发

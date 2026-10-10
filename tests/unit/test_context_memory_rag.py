@@ -10,12 +10,12 @@ from workstation_agent.memory import (
     MemoryScope,
     MemoryService,
 )
-from workstation_agent.rag import (
-    Document,
-    InMemoryDocumentRepository,
-    KeywordRetriever,
-    TextChunk,
-)
+from langchain_core.runnables import RunnableLambda
+
+from workstation_agent.application.rag import RagApplication
+from workstation_agent.rag.config import RagSettings
+from workstation_agent.rag.repository import InMemoryIndexRepository
+from workstation_agent.rag.retriever import HybridSearch
 
 
 class ContextBuilderTests(unittest.TestCase):
@@ -29,20 +29,19 @@ class ContextBuilderTests(unittest.TestCase):
                 scope_id="project_1",
             )
         )
-        documents = InMemoryDocumentRepository()
-        document = Document(source_uri="README.md", title="README", checksum="abc")
-        chunk = TextChunk(document_id=document.id, ordinal=0, content="Python setup guide")
-        documents.upsert_document(document, (chunk,))
-
-        messages, sources = ContextBuilder(
-            memory=memory, retriever=KeywordRetriever(documents)
-        ).build("Python setup", "Be helpful", scope_id="project_1")
+        repository = InMemoryIndexRepository()
+        RagApplication(repository, RagSettings()).ingest("README.md", "Python setup guide", {})
+        chunks = list(repository.get("README.md").chunks)
+        retriever = RunnableLambda(lambda query: HybridSearch.lexical(chunks, query, 5))
+        messages, sources = ContextBuilder(memory=memory, retriever=retriever).build(
+            "Python setup", "Be helpful", scope_id="project_1"
+        )
 
         self.assertEqual(messages[0].role, "system")
         self.assertIn("Use Python", messages[1].content)
         self.assertIn("README", messages[1].content)
         self.assertEqual(sources.memory_ids, (record.id,))
-        self.assertEqual(sources.chunk_ids, (chunk.id,))
+        self.assertEqual(sources.chunk_ids, (chunks[0].id,))
 
 
 if __name__ == "__main__":

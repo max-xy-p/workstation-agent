@@ -25,7 +25,7 @@ flowchart TD
     WS --> EXEC[ToolExecutor / Safety]
     EXEC --> FILE[工作区能力]
     CTX --> MEM[Memory：未完成持久化]
-    CTX --> RAG[RAG：未完成摄取]
+    CTX --> RAG[RAG：文档证据与混合检索]
 ```
 
 ## 当前与目标
@@ -37,7 +37,9 @@ Application 将图完成消息转换为业务 Run，只记录步骤类别和结�
 后续持久化会话采用官方 Checkpointer；审批恢复采用框架中断机制；界面消费官方流式更新。
 它们要分别建立真实入口、正常及失败验收后，才能在功能清单中标记可用。
 
-长期 Memory 用于用户和任务经验；RAG 管理外部文档。后续持久化变更通过版本化 migration 引入。
+长期 Memory 用于用户和任务经验；RAG 管理外部文档。
+RAG 内部直接使用框架 Document 和 Runnable，不保留旧文本块、查询包装或仓库兼容入口。
+RAG 摄取、查询及模型请求通过工具执行边界，使用说明见 [RAG 文档](rag.md)。后续持久化变更通过版本化 migration 引入。
 模型上下文仍需明确标记检索内容为数据，防止其被误当作系统指令。
 
 ## 框架选择与教学

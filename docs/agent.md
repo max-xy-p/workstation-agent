@@ -26,8 +26,8 @@ CLI / 后续界面 → build_agent_application → AgentApplication.run_task
     → 返回领域 Run
 ```
 
-`agent/factory.py` 只组装官方 Agent 和官方调用次数限制中间件。
-`models/providers/openai.py` 是唯一使用 OpenAI 供应商集成的位置。
+`agent/factory.py` 组装官方 Agent、调用次数限制和重复 RAG 查询防护中间件。
+OpenAI 兼容集成限制在 models/providers/，包括聊天与 RAG 模型适配器。
 `tools/mcp_client.py` 管理 MCP 连接；`tools/langchain.py` 将能力目录和结果转换为官方工具。
 `application/service.py` 消费图更新、组装上下文并返回业务结果，不自行调用模型或决定循环分支。
 
@@ -40,7 +40,7 @@ ToolMessage 保留 `tool_call_id`，框架据此把结果交回模型。
 - 正常最终消息：`completed`。
 - 参数、文件和路径等工具错误：错误 ToolMessage，允许模型解释或修正；任务仍可能正常完成。
 - 工作站返回需要审批：停止当前任务，`waiting_approval`；本阶段未交付审批恢复。
-- 官方模型或工具调用次数限制：`limit_reached`。
+- 官方模型、工具或 RAG 检索次数限制，以及相同参数的重复检索：`limit_reached`。
 - 网络、模型或其他运行异常：安全的 `failed` 说明，不回显原始异常。
 - 协程取消：标记 `cancelled` 后继续传递取消信号；已经开始的工具线程未必立即停止。
 - 空任务：调用前拒绝，不创建 Run。
@@ -60,8 +60,10 @@ Step 不保存工具原始参数或输出，避免默认审计泄漏内容。最
 默认每次任务独立，没有 Checkpointer、跨任务会话或恢复机制。
 可通过 `AgentApplication(repository=...)` 显式保存业务 Run；默认入口不保存任务、消息或答复。
 SQLite RunRepository 的 round-trip 和显式保存测试保留，但它不是 LangGraph Checkpointer。
-Memory/RAG 仅在注入 ContextBuilder 相应依赖时参与上下文，默认仍不装配。
-用户界面、持久化会话、审批恢复和完整 Memory/RAG 入口按后续模块交付。
+Memory 仅在注入 ContextBuilder 时参与上下文，默认不装配。
+RAG 已通过默认 search_documents 工具接入，证据使用 Context 模块统一格式。
+先通过 CLI 摄取文档，再由单 Agent 按证据决定后续查询，详见 [RAG 文档](rag.md)。
+用户界面、持久化会话、审批恢复和 Memory 持久化按后续模块交付。
 
 ## 验收依据
 

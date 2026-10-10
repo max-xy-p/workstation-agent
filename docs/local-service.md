@@ -118,7 +118,8 @@ async with httpx2.AsyncClient(
 - 服务使用无状态 Streamable HTTP，不持久化 MCP 会话、调用结果或 LangGraph 检查点。
 - 没有工具超时和取消恢复；客户端断开不能保证立即停止已开始的工作线程。
 - 启动脚本不是 Windows 系统服务安装器；没有登录自启、自动重启或界面。
-- MCP 能力服务本身不调用模型；另一个 `run` 入口已接入官方 Agent 和模型适配器。持久化 Memory 和 RAG 摄取仍待交付。
+- MCP 服务默认支持文件读取和 RAG 查询；配置并授权 RAG 模型后，可在工具权限边界内调用 embedding 与重排。
+  Agent 循环仍在 run 入口。RAG 摄取通过 CLI 受控写入，持久化 Memory 尚待交付，见 [RAG 文档](rag.md)。
 
 依赖用途：官方 `mcp` SDK 处理协议与协商；Starlette 承载 HTTP 接口和中间件；Uvicorn 运行服务；
 `httpx2` 用于 SDK 客户端连接。相比自行编写协议，需要安装这些包并常驻一个 Python 服务进程，
