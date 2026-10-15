@@ -3,7 +3,7 @@
 import json
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 
 class RagSearchStopped(RuntimeError):
@@ -15,7 +15,12 @@ class RagSearchGuard(AgentMiddleware):
 
     def _check(self, request):
         seen = set()
-        for message in request.state["messages"]:
+        messages = request.state["messages"]
+        start = max(
+            (i for i, message in enumerate(messages) if isinstance(message, HumanMessage)),
+            default=0,
+        )
+        for message in messages[start:]:
             if isinstance(message, AIMessage):
                 for call in message.tool_calls:
                     if call["name"] == "search_documents":

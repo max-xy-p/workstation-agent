@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .memory.config import MemorySettings
 from .rag.config import RagSettings
 
 
@@ -42,6 +43,39 @@ class Settings:
 
     # RAG 模型与资源预算，默认不向外发送文档。
     rag: RagSettings = field(default_factory=RagSettings)
+
+    memory: MemorySettings = field(default_factory=MemorySettings)
+
+    @property
+    def memory_database_path(self) -> Path:
+        """记忆与会话数据库必须位于工作区内。"""
+        return self._memory_path("memory.db")
+
+    @property
+    def session_database_path(self) -> Path:
+        """框架会话与长期记忆分库保存，独立管理迁移。"""
+        return self._memory_path("sessions.db")
+
+    def _memory_path(self, name):
+        path = self.database_path.with_name(name).resolve()
+        if not path.is_relative_to(self.workspace.resolve()):
+            raise ValueError("记忆数据目录必须位于工作区内")
+        return path
+
+    @property
+    def memory_access(self):
+        """身份来自配置而非模型参数，工作区标识使用规范化路径。"""
+        import hashlib
+        import os
+
+        from .memory.models import MemoryAccess
+
+        identity = os.path.normcase(str(self.workspace.resolve()))
+        return MemoryAccess(
+            user_id=self.memory.user_id,
+            workspace_id=hashlib.sha256(identity.encode()).hexdigest(),
+            project_id=self.memory.project_id,
+        )
 
     @property
     def rag_database_path(self) -> Path:
@@ -126,4 +160,5 @@ class Settings:
             service_port=service_port,
             service_token=os.getenv("WORKSTATION_AGENT_SERVICE_TOKEN") or None,
             rag=RagSettings.from_env(),
+            memory=MemorySettings.from_env(),
         )

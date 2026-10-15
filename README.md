@@ -52,8 +52,8 @@ uv run workstation-agent rag status
 API key 从 `WORKSTATION_AGENT_API_KEY` 读取，也可使用 `OPENAI_API_KEY`。
 默认模型调用上限 8、工具调用上限 32、请求超时 30 秒。
 
-当前提供官方 Agent 单次任务、文件只读工具及 RAG 文档摄取与检索。
-Memory 持久化、会话恢复、审批恢复和用户界面待逐模块交付。
+当前提供官方 Agent、文件只读工具、RAG 和文本长期记忆。
+记忆管理、可选会话续聊及自动提取见 [记忆使用与验收](docs/memory.md)。审批恢复和用户界面待交付。
 HTTP 集成测试使用本机兼容接口夹具，外部模型实际效果需要使用自己的服务配置验收。
 
 ## 开发

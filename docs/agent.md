@@ -57,13 +57,13 @@ Step 不保存工具原始参数或输出，避免默认审计泄漏内容。最
 - 底层图递归限制为中间件留出执行余量；业务调用次数仍由官方中间件限制。
 - 模型客户端重试次数为 0，图不自动重试工具副作用。
 
-默认每次任务独立，没有 Checkpointer、跨任务会话或恢复机制。
+默认每次任务独立；--session 或 SESSIONS_ENABLED 可启用官方 SQLite Checkpointer 跨任务续聊，不能恢复工具审批。
 可通过 `AgentApplication(repository=...)` 显式保存业务 Run；默认入口不保存任务、消息或答复。
 SQLite RunRepository 的 round-trip 和显式保存测试保留，但它不是 LangGraph Checkpointer。
-Memory 仅在注入 ContextBuilder 时参与上下文，默认不装配。
+Memory 已通过受控查询门面装配到 ContextBuilder，动态内容按次注入模型请求，不持久化到会话历史。
 RAG 已通过默认 search_documents 工具接入，证据使用 Context 模块统一格式。
 先通过 CLI 摄取文档，再由单 Agent 按证据决定后续查询，详见 [RAG 文档](rag.md)。
-用户界面、持久化会话、审批恢复和 Memory 持久化按后续模块交付。
+显式记忆写入/删除、会话清除和默认关闭的自动提取见 [记忆使用与验收](memory.md)。用户界面与审批恢复仍待交付。
 
 ## 验收依据
 

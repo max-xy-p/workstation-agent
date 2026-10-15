@@ -31,9 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--rag", action="store_true", help="require configured RAG model authorization"
     )
     doctor.add_argument("--service", action="store_true", help="require MCP service configuration")
+    doctor.add_argument(
+        "--memory", action="store_true", help="check memory storage and extraction settings"
+    )
     doctor.add_argument("--agent", action="store_true", help="check model and MCP configuration")
     run = subparsers.add_parser("run", help="run a task with the official LangChain agent")
     run.add_argument("task")
+    run.add_argument("--session", help="persist and continue this session ID")
+    run.add_argument("--approve-memory-write", action="store_true")
+    run.add_argument("--approve-memory-delete", action="store_true")
     run.add_argument("--transport", choices=("mcp", "local"), default="mcp")
     run.add_argument("--trace", action="store_true", help="print official graph node names")
     subparsers.add_parser("serve", help="start the local MCP workstation service")
@@ -61,6 +67,39 @@ def build_parser() -> argparse.ArgumentParser:
     delete = rag_commands.add_parser("delete")
     delete.add_argument("path")
     delete.add_argument("--approve-write", action="store_true")
+    memory = subparsers.add_parser("memory", help="manage owned long-term text notes")
+    commands = memory.add_subparsers(dest="memory_command", required=True)
+    add = commands.add_parser("add")
+    add.add_argument("content")
+    add.add_argument(
+        "--kind", choices=("preference", "decision", "experience"), default="preference"
+    )
+    add.add_argument("--scope", choices=("user", "workspace", "project"))
+    add.add_argument("--expires-at")
+    add.add_argument("--approve-write", action="store_true")
+    listing = commands.add_parser("list")
+    listing.add_argument("--limit", type=int, default=20)
+    listing.add_argument("--offset", type=int, default=0)
+    get = commands.add_parser("get")
+    get.add_argument("memory_id")
+    search_memory = commands.add_parser("search")
+    search_memory.add_argument("query")
+    search_memory.add_argument("--limit", type=int, default=5)
+    update = commands.add_parser("update")
+    update.add_argument("memory_id")
+    update.add_argument("content")
+    update.add_argument("--version", type=int, required=True)
+    update.add_argument("--expires-at")
+    update.add_argument("--approve-write", action="store_true")
+    forget = commands.add_parser("delete")
+    forget.add_argument("memory_id")
+    forget.add_argument("--version", type=int, required=True)
+    forget.add_argument("--approve-delete", action="store_true")
+    sessions = subparsers.add_parser("session", help="manage persisted conversation history")
+    session_commands = sessions.add_subparsers(dest="session_command", required=True)
+    clear = session_commands.add_parser("clear")
+    clear.add_argument("session_id")
+    clear.add_argument("--approve-delete", action="store_true")
     subparsers.add_parser("init-db", help="initialize the local SQLite state database")
     return parser
 
@@ -136,6 +175,45 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print("RAG index check failed")
                 ready = False
+        print(f"Memory enabled: {settings.memory.enabled}")
+        print(
+            f"Memory identity: {settings.memory.user_id}; "
+            f"project: {settings.memory.project_id or '(workspace)'}"
+        )
+        print(
+            f"Memory context chars / limit: {settings.memory.context_chars} / "
+            f"{settings.memory.search_limit}"
+        )
+        print(f"Memory record budget: {settings.memory.max_records}")
+        print(
+            f"Memory auto extraction / outbound: {settings.memory.auto_extract} / "
+            f"{settings.memory.allow_remote}"
+        )
+        print(
+            f"Memory extraction chars / candidates / calls: {settings.memory.extract_chars} / "
+            f"{settings.memory.extract_limit} / {settings.memory.extract_calls}"
+        )
+        print(
+            f"Sessions enabled: {settings.memory.sessions}; "
+            f"summary tokens: {settings.memory.summary_tokens}"
+        )
+        print(f"langgraph-checkpoint-sqlite: {version('langgraph-checkpoint-sqlite')}")
+        print(f"langmem: {version('langmem')}")
+        try:
+            print(f"Memory database: {settings.memory_database_path}")
+            print(f"Session database: {settings.session_database_path}")
+            if args.memory and settings.memory.enabled:
+                from .bootstrap import build_memory_application
+
+                report = build_memory_application(settings).execute("list_memories", {"limit": 1})
+                print(f"Memory records in allowed scopes: {report['total']}")
+        except Exception:
+            print("Memory storage check failed")
+            ready = False
+        if settings.memory.auto_extract:
+            ready = ready and bool(
+                settings.memory.allow_remote and settings.model and settings.api_key
+            )
         if args.agent:
             ready = ready and bool(settings.model and settings.api_key and settings.service_token)
         return 0 if ready else 1
@@ -164,6 +242,71 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("invalid RAG configuration or JSON; check settings", file=sys.stderr)
             return 2
 
+    if args.command == "memory":
+        from .bootstrap import build_memory_application
+
+        try:
+            memory = build_memory_application(
+                settings,
+                approve_write=getattr(args, "approve_write", False),
+                approve_delete=getattr(args, "approve_delete", False),
+            )
+            operation = args.memory_command
+            if operation == "add":
+                name, arguments = (
+                    "remember_memory",
+                    {
+                        "content": args.content,
+                        "kind": args.kind,
+                        "scope": args.scope,
+                        "expires_at": args.expires_at,
+                    },
+                )
+            elif operation == "update":
+                name, arguments = (
+                    "update_memory",
+                    {
+                        "memory_id": args.memory_id,
+                        "content": args.content,
+                        "expected_version": args.version,
+                        "expires_at": args.expires_at,
+                    },
+                )
+            elif operation == "delete":
+                name, arguments = (
+                    "delete_memory",
+                    {
+                        "memory_id": args.memory_id,
+                        "expected_version": args.version,
+                    },
+                )
+            elif operation == "get":
+                name, arguments = "get_memory", {"memory_id": args.memory_id}
+            elif operation == "list":
+                name, arguments = "list_memories", {"limit": args.limit, "offset": args.offset}
+            else:
+                name, arguments = "search_memory", {"query": args.query, "limit": args.limit}
+            return _print_result(memory.tools.execute_tool(name, arguments))
+        except Exception:
+            print("memory configuration or operation failed", file=sys.stderr)
+            return 1
+
+    if args.command == "session":
+        from .bootstrap import build_session_application
+
+        try:
+            result = build_session_application(settings, approve_delete=args.approve_delete).clear(
+                args.session_id
+            )
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except Exception:
+            print(
+                "session clear failed; explicit delete approval and valid configuration required",
+                file=sys.stderr,
+            )
+            return 3 if not args.approve_delete else 1
+
     if args.command == "run":
         if (
             not args.task.strip()
@@ -179,13 +322,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .bootstrap import build_agent_application
 
         async def execute():
-            async with build_agent_application(settings, transport=args.transport) as application:
+            async with build_agent_application(
+                settings,
+                transport=args.transport,
+                persist_session=bool(args.session),
+                approve_memory_write=args.approve_memory_write,
+                approve_memory_delete=args.approve_memory_delete,
+            ) as application:
                 trace = (
                     (lambda node: print(f"langgraph: {node}", file=sys.stderr))
                     if args.trace
                     else None
                 )
-                return await application.run_task(args.task, on_node=trace)
+                return await application.run_task(args.task, session_id=args.session, on_node=trace)
 
         try:
             result = asyncio.run(execute())

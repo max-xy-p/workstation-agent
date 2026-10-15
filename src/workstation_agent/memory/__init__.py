@@ -1,13 +1,15 @@
-from .models import MemoryKind, MemoryQuery, MemoryRecord, MemoryScope
-from .repository import InMemoryMemoryRepository, MemoryRepository
+"""提供长期文本记忆的稳定业务接口。"""
+
+from .models import MemoryAccess, MemoryCandidate, MemoryRecord, MemoryScope, MemorySource
+from .repository import MemoryRepository
 from .service import MemoryService
 
 __all__ = [
-    "InMemoryMemoryRepository",
-    "MemoryKind",
-    "MemoryQuery",
+    "MemoryAccess",
+    "MemoryCandidate",
     "MemoryRecord",
-    "MemoryRepository",
     "MemoryScope",
+    "MemorySource",
+    "MemoryRepository",
     "MemoryService",
 ]

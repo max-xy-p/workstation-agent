@@ -15,6 +15,7 @@ def new_id(prefix: str) -> str:
 
 class RunStatus(StrEnum):
     """定义任务执行状态。"""
+
     CREATED = "created"
     PREPARING = "preparing"
     THINKING = "thinking"
@@ -38,6 +39,7 @@ TERMINAL_RUN_STATUSES = {
 
 class StepKind(StrEnum):
     """定义执行步骤的类别。"""
+
     MODEL = "model"
     TOOL = "tool"
     MEMORY = "memory"
@@ -46,6 +48,7 @@ class StepKind(StrEnum):
 
 class StepStatus(StrEnum):
     """定义步骤执行状态。"""
+
     STARTED = "started"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -55,6 +58,7 @@ class StepStatus(StrEnum):
 @dataclass(slots=True)
 class Step:
     """记录一次模型、工具、记忆或检索操作。"""
+
     # 所属任务标识。
     run_id: str
     # 操作类别。
@@ -92,9 +96,10 @@ class Step:
 @dataclass(slots=True)
 class Run:
     """保存单次任务、执行步骤和最终结果。"""
+
     # 用户提交的任务内容。
     task: str
-    # 关联会话标识，当前每次任务重新生成。
+    # 关联会话标识，显式会话入口可跨任务复用。
     session_id: str
     # 任务的唯一标识。
     id: str = field(default_factory=lambda: new_id("run"))
@@ -132,7 +137,8 @@ class Run:
 @dataclass(slots=True)
 class Session:
     """保存会话标识和标题，供任务关联。"""
-    # 会话标识，当前入口不复用会话。
+
+    # 会话标识，可映射为框架 thread_id。
     id: str = field(default_factory=lambda: new_id("session"))
     # 可选会话标题。
     title: str | None = None

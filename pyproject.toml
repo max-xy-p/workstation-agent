@@ -17,6 +17,8 @@ dependencies = [
     "langchain-classic>=1,<2",
     "rank-bm25>=0.2.2,<1",
     "markdown-it-py>=4,<5",
+    "langgraph-checkpoint-sqlite>=3,<4",
+    "langmem>=0.0.30,<0.1",
 ]
 
 [project.scripts]

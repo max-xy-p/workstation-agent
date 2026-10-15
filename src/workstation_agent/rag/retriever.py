@@ -7,40 +7,13 @@ from typing import Any
 
 from langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever
 from langchain_core.documents import BaseDocumentCompressor
-from langchain_core.documents import Document as FrameworkDocument
 from langchain_core.embeddings import Embeddings
-from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import RunnableLambda
 from langchain_core.vectorstores import InMemoryVectorStore
-from rank_bm25 import BM25Plus
 
+from ..retrieval.lexical import lexical_search
 from ..tools.contracts import ToolError
 from .index import index_text, terms, validate_vectors
-
-
-class _BM25Retriever(BaseRetriever):
-    """通过官方扩展接口接入现成 BM25，补充空证据与稳定同分规则。"""
-
-    docs: list[FrameworkDocument]
-    vocabulary: list[frozenset[str]]
-    vectorizer: Any
-    k: int
-
-    def _get_relevant_documents(self, query, *, run_manager):
-        query_terms = list(dict.fromkeys(terms(query)))
-        scores = self.vectorizer.get_scores(query_terms)
-        matching = [
-            i
-            for i, vocabulary in enumerate(self.vocabulary)
-            if vocabulary.intersection(query_terms)
-        ]
-        matching.sort(key=lambda i: (-scores[i], i))
-        return [
-            self.docs[i].model_copy(
-                update={"metadata": {**self.docs[i].metadata, "bm25_score": float(scores[i])}}
-            )
-            for i in matching[: self.k]
-        ]
 
 
 class _SnapshotEmbeddings(Embeddings):
@@ -96,17 +69,7 @@ class HybridSearch:
     @staticmethod
     def lexical(documents, query, limit):
         """用现成 BM25Plus 避免小语料高频词出现负 IDF，算法不在项目内实现。"""
-        tokenized = [terms(document.page_content) for document in documents]
-        usable = [(doc, tokens) for doc, tokens in zip(documents, tokenized, strict=True) if tokens]
-        if not usable:
-            return []
-        docs, corpus = zip(*usable, strict=True)
-        return _BM25Retriever(
-            docs=list(docs),
-            vocabulary=[frozenset(tokens) for tokens in corpus],
-            vectorizer=BM25Plus(list(corpus), k1=1.5, b=0.75, delta=1.0),
-            k=limit,
-        ).invoke(query)
+        return lexical_search(documents, query, limit, terms)
 
     def retrieve(
         self,
