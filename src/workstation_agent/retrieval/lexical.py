@@ -1,7 +1,9 @@
 """复用现成 BM25 与官方 Retriever 扩展点，不接触存储和网络。"""
 
-from typing import Any
+from collections.abc import Callable, Sequence
 
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from rank_bm25 import BM25Plus
 
@@ -9,13 +11,15 @@ from rank_bm25 import BM25Plus
 class _BM25Retriever(BaseRetriever):
     """补充零命中排除和稳定排序，评分交给成熟组件。"""
 
-    docs: list
+    docs: list[Document]
     vocabulary: list[frozenset[str]]
-    vectorizer: Any
+    vectorizer: BM25Plus
     k: int
-    tokenizer: Any
+    tokenizer: Callable[[str], list[str]]
 
-    def _get_relevant_documents(self, query, *, run_manager):
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> list[Document]:
         query_terms = list(dict.fromkeys(self.tokenizer(query)))
         scores = self.vectorizer.get_scores(query_terms)
         matching = [i for i, words in enumerate(self.vocabulary) if words.intersection(query_terms)]
@@ -28,7 +32,12 @@ class _BM25Retriever(BaseRetriever):
         ]
 
 
-def lexical_search(documents, query, limit, tokenizer):
+def lexical_search(
+    documents: Sequence[Document],
+    query: str,
+    limit: int,
+    tokenizer: Callable[[str], list[str]],
+) -> list[Document]:
     """在调用方已过滤的文档上检索，记忆与 RAG 不共享数据。"""
     usable = [(doc, tokenizer(doc.page_content)) for doc in documents]
     usable = [(doc, tokens) for doc, tokens in usable if tokens]
@@ -38,7 +47,7 @@ def lexical_search(documents, query, limit, tokenizer):
     return _BM25Retriever(
         docs=list(docs),
         vocabulary=[frozenset(tokens) for tokens in corpus],
-        vectorizer=BM25Plus(list(corpus), k1=1.5, b=0.75, delta=1.0),
+        vectorizer=BM25Plus(list(corpus), k1=1.5, b=0.75, delta=1),
         tokenizer=tokenizer,
         k=limit,
     ).invoke(query)

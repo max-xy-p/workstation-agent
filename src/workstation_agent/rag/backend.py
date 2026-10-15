@@ -1,8 +1,9 @@
 """定义可替换的 RAG 模型能力，核心不判断供应商类型。"""
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
+@runtime_checkable
 class RagBackend(Protocol):
     """约定 embedding、块上下文和候选重排，调用方负责授权。"""
 

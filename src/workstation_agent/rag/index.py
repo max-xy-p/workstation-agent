@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict
 
 from .models import SourceDocument
 
+# 该标记描述已保存的索引文本格式，切换查询策略不改变它，避免无必要地重建索引。
+INDEX_TEXT_VERSION = "native-retrieval-v3"
+
 
 def terms(text: str) -> list[str]:
     """保留技术标识符，中文使用单字与双字滑窗，索引和查询保持一致。"""

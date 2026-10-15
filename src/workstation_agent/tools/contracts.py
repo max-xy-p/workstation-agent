@@ -32,8 +32,10 @@ class ToolError(RuntimeError):
 
 class Tool(Protocol):
     """约定工具需要提供的说明、权限和调用方法。"""
-    # 工具名称、用途和参数说明。
-    definition: ToolDefinition
+    @property
+    def definition(self) -> ToolDefinition:
+        """只读工具说明；既允许实现为属性，也允许实现为实例字段。"""
+        ...
     # 执行工具需要的权限等级。
     permission: PermissionLevel
 

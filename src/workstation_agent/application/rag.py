@@ -1,43 +1,106 @@
 """编排框架文档、索引快照与证据；副作用由工具执行边界授权。"""
 
 from hashlib import sha256
+from typing import Literal, NotRequired, TypedDict
 
-from ..context.evidence import assemble_evidence
+from ..context.evidence import Evidence, assemble_evidence
 from ..rag.backend import RagBackend, token_upper_bound
-from ..rag.chunking import ChunkBudgetExceeded, DocumentChunker, stable_id
+from ..rag.chunking.contracts import (
+    ChunkBudgetExceeded,
+    ChunkingStrategy,
+    InvalidChunkingResult,
+)
+from ..rag.chunking.structured import StructuredChunkingStrategy
+from ..rag.chunking.validation import validate_chunks
 from ..rag.config import RagSettings
-from ..rag.index import IndexSnapshot, index_text, validate_snapshot, validate_vectors
+from ..rag.identifiers import stable_id
+from ..rag.index import (
+    INDEX_TEXT_VERSION,
+    IndexSnapshot,
+    index_text,
+    validate_snapshot,
+    validate_vectors,
+)
 from ..rag.models import SourceDocument
 from ..rag.repository import IndexRepository
-from ..rag.retriever import FrameworkReranker, HybridSearch
+from ..rag.retriever import KnowledgeRetrievalStrategy
+from ..retrieval.strategy import RetrievalStrategy, validate_hits
 from ..tools.contracts import ToolError
+
+
+class IngestResult(TypedDict):
+    """描述文档摄取结果；未变化的文档不重复生成索引。"""
+
+    status: Literal["unchanged", "indexed"]
+    document_id: str
+    chunks: int
+    checksum: NotRequired[str]
+    mode: NotRequired[str]
+
+
+class IndexStatus(TypedDict):
+    """记录索引数量和是否需要重新摄取。"""
+
+    status: str
+    documents: int
+    chunks: int
+    incompatible_documents: int
+    invalid_documents: int
+    obsolete_sources: list[str]
+    mode: str
+
+
+class DeleteResult(TypedDict):
+    """说明指定文档的索引是否已删除。"""
+
+    status: Literal["deleted", "not_found"]
+
+
+class SearchResult(TypedDict):
+    """返回实际采用的原文证据、引用 ID 和预算提示。"""
+
+    status: str
+    mode: str
+    evidence: list[Evidence]
+    context: str
+    used_chunk_ids: list[str]
+    warnings: list[str]
 
 
 class RagApplication:
     """构建完整快照后原子发布，处理链统一使用框架 Document。"""
 
     def __init__(
-        self, repository: IndexRepository, settings: RagSettings, backend: RagBackend | None = None
-    ):
-        self.repository = repository
+        self,
+        repository: IndexRepository,
+        settings: RagSettings,
+        backend: RagBackend | None = None,
+        *,
+        retrieval: RetrievalStrategy[IndexSnapshot] | None = None,
+        chunking: ChunkingStrategy | None = None,
+    ) -> None:
+        self.repository: IndexRepository = repository
         self.settings = settings
-        self.backend = backend
-        self.chunker = DocumentChunker(settings)
+        self.backend: RagBackend | None = backend
+        self.retrieval: RetrievalStrategy[IndexSnapshot] = (
+            retrieval if retrieval is not None else KnowledgeRetrievalStrategy(settings, backend)
+        )
+        self.chunker: ChunkingStrategy = (
+            chunking if chunking is not None else StructuredChunkingStrategy(settings)
+        )
 
     @property
-    def fingerprint(self):
+    def fingerprint(self) -> str:
         """配置和管线版本变化时要求重新摄取，不转换旧处理结果。"""
         parts = (
-            self.chunker.version,
-            self.settings.chunk_size,
-            self.settings.chunk_overlap,
+            *self.chunker.signature,
             "terms-v1",
-            HybridSearch.version,
+            INDEX_TEXT_VERSION,
             self.backend.fingerprint if self.backend else "lexical",
         )
         return sha256(repr(parts).encode()).hexdigest()
 
-    def ingest(self, source: str, text: str, metadata: dict[str, str]):
+    def ingest(self, source: str, text: str, metadata: dict[str, str]) -> IngestResult:
         """处理已授权读取的文本；发布失败时保留已有版本。"""
         checksum = sha256(text.encode("utf-8")).hexdigest()
         previous = self.repository.get(source)
@@ -62,8 +125,11 @@ class RagApplication:
         )
         try:
             chunks = self.chunker.split(document, text)
+            validate_chunks(document, text, chunks, self.settings)
         except ChunkBudgetExceeded:
             raise ToolError("RAG chunk budget exceeded", code="resource_limit") from None
+        except InvalidChunkingResult:
+            raise ToolError("分块策略返回了无效结果", code="invalid_chunking_output") from None
         estimated_calls = (len(chunks) if self.settings.context_model else 0) + (
             (len(chunks) + 15) // 16 if self.settings.embedding_model else 0
         )
@@ -111,7 +177,11 @@ class RagApplication:
         snapshot = IndexSnapshot(
             source=document,
             chunks=chunks,
-            vectors={chunk.id: tuple(vector) for chunk, vector in zip(chunks, vectors, strict=True)}
+            vectors={
+                chunk.id: tuple(vector)
+                for chunk, vector in zip(chunks, vectors, strict=True)
+                if chunk.id is not None
+            }
             if vectors
             else {},
             fingerprint=self.fingerprint,
@@ -125,7 +195,7 @@ class RagApplication:
             "mode": "hybrid" if vectors else "bm25",
         }
 
-    def status(self):
+    def status(self) -> IndexStatus:
         """只读检查当前格式，不解码旧对象或调用模型。"""
         state = self.repository.state()
         incompatible = len(state.obsolete_sources) + sum(
@@ -154,14 +224,16 @@ class RagApplication:
             "mode": "hybrid" if self.settings.embedding_model else "bm25",
         }
 
-    def delete(self, source: str):
+    def delete(self, source: str) -> DeleteResult:
         """删除指定来源的索引快照，保留原文件。"""
         return {"status": "deleted" if self.repository.delete(source) else "not_found"}
 
-    def search(self, query: str, filters: dict[str, str], limit: int):
+    def search(self, query: str, filters: dict[str, str], limit: int) -> SearchResult:
         """检索返回框架文档，通过块 ID 回到原文，再进行预算内扩展。"""
         if not query.strip():
             raise ToolError("query must not be blank", code="invalid_arguments")
+        if limit < 1:
+            raise ToolError("检索数量必须大于零", code="invalid_arguments")
         state = self.repository.state()
         obsolete = [
             source
@@ -199,36 +271,16 @@ class RagApplication:
                 "used_chunk_ids": [],
                 "warnings": [],
             }
-        query_vector = None
-        if self.settings.embedding_model and self.backend:
-            embeddings = self.backend.embed([query])
-            validate_vectors(embeddings, 1)
-            query_vector = embeddings[0]
-        compressor = (
-            FrameworkReranker(
-                backend=self.backend,
-                max_model_calls=self.settings.max_model_calls,
-                prior_calls=int(bool(self.settings.embedding_model)),
-            )
-            if self.settings.context_model and self.backend
-            else None
+        originals = {chunk.id: chunk for chunk in chunks if chunk.id is not None}
+        hits = validate_hits(
+            self.retrieval.retrieve(query, tuple(snapshots), limit=limit), set(originals), limit
         )
-        hits = HybridSearch().retrieve(
-            chunks,
-            query,
-            self.settings.recall_limit,
-            vectors={key: value for item in snapshots for key, value in item.vectors.items()},
-            query_vector=query_vector,
-            rerank_limit=self.settings.rerank_limit,
-            compressor=compressor,
-        )[:limit]
-        originals = {chunk.id: chunk for chunk in chunks}
         selected = [
             originals[hit.id].model_copy(
                 update={
                     "metadata": {
                         **originals[hit.id].metadata,
-                        "retrieval_score": hit.metadata["retrieval_score"],
+                        "retrieval_score": hit.score,
                     }
                 }
             )

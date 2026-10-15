@@ -44,9 +44,21 @@ API key 和端点复用现有配置，不自动选型或下载模型。MCP 使�
 模型失败不静默替换管线：返回失败，摄取保留旧版本，查询不伪造证据。
 模型、端点、输入预算或分块配置变化后返回 index_incompatible，需重新摄取匹配文档。
 
+## 检索策略的分工
+
+`RagApplication` 先按查询条件筛选文档，再将快照交给注入的 `KnowledgeRetrievalStrategy`。
+默认策略组合现有 BM25、向量召回、排名融合和可选重排；模型调用仍使用经过工具授权的后端。
+策略返回块 ID 和分数，应用检查 ID 后读取原文，再扩展片段并交给 Context 生成引用。
+记忆使用独立策略，两者的分词、排序和模型调用方式可以分别调整。
+本次调整没有改变索引格式，已有索引无需因策略重构而重建。扩展方式见 [检索策略](retrieval.md)。
+
 ## 分块及来源
 
-DocumentChunker 使用原生框架 Document 作为输出：markdown-it-py 按 CommonMark 解析 Markdown，并启用表格规则，
+分块通过 `ChunkingStrategy` 协议注入，默认实现是 `StructuredChunkingStrategy`。
+应用在上下文增强和向量生成前统一校验来源、原文位置、片段覆盖和预算，
+不符合约定的结果不会发布。策略签名参与索引兼容检查，默认索引仍可复用；详见 [分块策略](chunking.md)。
+
+默认策略使用原生框架 Document 作为输出：markdown-it-py 按 CommonMark 解析 Markdown，并启用表格规则，
 使用 token.map 的行位置识别顶层 ATX / Setext 标题、代码与表格，映射回原始字符区间。
 段落、换行、句末标点及字符递归切分由官方 RecursiveCharacterTextSplitter 完成，
 配置 add_start_index=true、strip_whitespace=false、keep_separator=end，验证切片后转换为全文偏移。
@@ -80,8 +92,9 @@ line_start / line_end 为一基行号，CRLF 保持不变。
 不再维护手写 Markdown 扫描、递归切分、BM25 公式、余弦计算或 RRF 公式。
 项目保留来源追溯、上下文增强、原子发布、过滤、证据预算和权限等业务规则。
 
-处理链统一使用 LangChain Document，不再保留 TextChunk、RetrievalQuery、RetrievedChunk、
-自定义 Retriever Protocol 或 FrameworkRetriever 转换入口；Context 接收官方 Runnable 并调用 invoke。
+处理链统一使用 LangChain Document，不再保留 TextChunk、RetrievalQuery、RetrievedChunk
+或 FrameworkRetriever 转换入口。检索和分块的项目协议只定义业务输入输出与校验边界，
+底层继续组合官方组件；Context 的文档检索入口接收官方 Runnable 并调用 invoke。
 SourceDocument 只记录来源身份，IndexSnapshot 保存来源、框架文档和按块 ID 关联的向量。
 IndexRepository 仅提供 state / get / publish / delete；不再保留 upsert_document、all_chunks
 或独立关键词仓库，也不保存检索阶段未使用的 counts。旧类型和仓库接口没有兼容导出。

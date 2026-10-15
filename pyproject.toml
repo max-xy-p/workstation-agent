@@ -42,3 +42,38 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 addopts = "-q"
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+]
+
+[tool.pyright]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["src"]
+typeCheckingMode = "basic"
+include = [
+    "src/workstation_agent/retrieval",
+    "src/workstation_agent/memory/retrieval.py",
+    "src/workstation_agent/memory/service.py",
+    "src/workstation_agent/rag/retriever.py",
+    "src/workstation_agent/application/rag.py",
+    "src/workstation_agent/context/evidence.py",
+    "src/workstation_agent/context/builder.py",
+    "src/workstation_agent/tools/extraction.py",
+    "src/workstation_agent/rag/backend.py",
+    "src/workstation_agent/rag/index.py",
+    "src/workstation_agent/rag/chunking",
+    "src/workstation_agent/rag/identifiers.py",
+    "src/workstation_agent/bootstrap.py",
+    "src/workstation_agent/tools/builtin/memory.py",
+    "src/workstation_agent/tools/builtin/rag.py",
+    "src/workstation_agent/tools/contracts.py",
+    "tests/unit/test_retrieval_strategies.py",
+    "tests/integration/test_retrieval_strategies.py",
+    "tests/unit/test_chunking_strategies.py",
+    "tests/integration/test_chunking_strategies.py",
+    "tests/unit/test_rag.py",
+]

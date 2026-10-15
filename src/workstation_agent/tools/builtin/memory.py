@@ -7,9 +7,10 @@ from typing import Literal
 from pydantic import Field
 
 from ...domain.runs import new_id
-from ...memory.models import MemorySource
+from ...memory.models import MemoryAccess, MemorySource
+from ...memory.service import MemoryService
 from ...safety import PermissionLevel
-from ..contracts import PydanticTool, ToolArguments, ToolError
+from ..contracts import PydanticTool, Tool, ToolArguments, ToolError
 
 MEMORY_SOURCE: ContextVar[MemorySource | None] = ContextVar("memory_source", default=None)
 
@@ -58,11 +59,11 @@ class ListArguments(ToolArguments):
     offset: int = Field(default=0, ge=0)
 
 
-def _source():
+def _source() -> MemorySource:
     return MEMORY_SOURCE.get() or MemorySource(origin="explicit", run_id=new_id("manual"))
 
 
-def _expiry(value):
+def _expiry(value: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value) if value and value != "never" else None
         if parsed is not None and parsed.utcoffset() is None:
@@ -74,7 +75,7 @@ def _expiry(value):
         ) from None
 
 
-def memory_tools(service, access):
+def memory_tools(service: MemoryService, access: MemoryAccess) -> tuple[Tool, ...]:
     """生成只绑定当前可信范围的记忆工具目录。"""
 
     class RememberTool(PydanticTool[RememberArguments]):
@@ -85,14 +86,14 @@ def memory_tools(service, access):
         permission = PermissionLevel.CONTROLLED_WRITE
         arguments_model = RememberArguments
 
-        def run(self, args):
+        def run(self, arguments: RememberArguments) -> str:
             record = service.remember(
                 access,
-                content=args.content,
-                kind=args.kind,
-                scope=access.scope(args.scope),
+                content=arguments.content,
+                kind=arguments.kind,
+                scope=access.scope(arguments.scope),
                 source=_source(),
-                expires_at=_expiry(args.expires_at),
+                expires_at=_expiry(arguments.expires_at),
             )
             return record.model_dump_json()
 
@@ -104,14 +105,14 @@ def memory_tools(service, access):
         permission = PermissionLevel.CONTROLLED_WRITE
         arguments_model = UpdateArguments
 
-        def run(self, args):
+        def run(self, arguments: UpdateArguments) -> str:
             record = service.update(
                 access,
-                args.memory_id,
-                args.expected_version,
-                content=args.content,
+                arguments.memory_id,
+                arguments.expected_version,
+                content=arguments.content,
                 source=_source(),
-                expiry="keep" if args.expires_at is None else _expiry(args.expires_at),
+                expiry="keep" if arguments.expires_at is None else _expiry(arguments.expires_at),
             )
             return record.model_dump_json()
 
@@ -123,8 +124,8 @@ def memory_tools(service, access):
         permission = PermissionLevel.SAFE_READ
         arguments_model = IdArguments
 
-        def run(self, args):
-            return service.get(access, args.memory_id).model_dump_json()
+        def run(self, arguments: IdArguments) -> str:
+            return service.get(access, arguments.memory_id).model_dump_json()
 
     class SearchTool(PydanticTool[SearchArguments]):
         """返回相关的有效记忆，原文由 Context 统一组装。"""
@@ -134,10 +135,12 @@ def memory_tools(service, access):
         permission = PermissionLevel.SAFE_READ
         arguments_model = SearchArguments
 
-        def run(self, args):
+        def run(self, arguments: SearchArguments) -> str:
             from ...context.builder import serialize_memory_records
 
-            return serialize_memory_records(service.search(access, args.query, limit=args.limit))
+            return serialize_memory_records(
+                service.search(access, arguments.query, limit=arguments.limit)
+            )
 
     class ListTool(PydanticTool[ListArguments]):
         """按范围列出记录，返回总数便于分页。"""
@@ -147,7 +150,7 @@ def memory_tools(service, access):
         permission = PermissionLevel.SAFE_READ
         arguments_model = ListArguments
 
-        def run(self, args):
+        def run(self, arguments: ListArguments) -> str:
             import json
 
             records = service.records(access, include_expired=True)
@@ -156,7 +159,7 @@ def memory_tools(service, access):
                     "total": len(records),
                     "records": [
                         r.model_dump(mode="json")
-                        for r in records[args.offset : args.offset + args.limit]
+                        for r in records[arguments.offset : arguments.offset + arguments.limit]
                     ],
                 },
                 ensure_ascii=False,
@@ -172,10 +175,10 @@ def memory_tools(service, access):
         permission = PermissionLevel.DESTRUCTIVE
         arguments_model = DeleteArguments
 
-        def run(self, args):
+        def run(self, arguments: DeleteArguments) -> str:
             import json
 
-            service.forget(access, args.memory_id, args.expected_version)
-            return json.dumps({"deleted": args.memory_id, "session_cleared": False})
+            service.forget(access, arguments.memory_id, arguments.expected_version)
+            return json.dumps({"deleted": arguments.memory_id, "session_cleared": False})
 
     return (RememberTool(), UpdateTool(), GetTool(), SearchTool(), ListTool(), DeleteTool())

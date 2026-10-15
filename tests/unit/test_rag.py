@@ -1,15 +1,15 @@
 import unittest
 from dataclasses import replace
 
-from workstation_agent.application.rag import RagApplication
 from langchain_core.documents import Document
 
-from workstation_agent.rag.chunking import DocumentChunker
+from workstation_agent.application.rag import RagApplication
+from workstation_agent.rag.chunking.structured import StructuredChunkingStrategy
 from workstation_agent.rag.config import RagSettings
-from workstation_agent.rag.index import terms, validate_vectors
+from workstation_agent.rag.index import IndexSnapshot, terms, validate_vectors
 from workstation_agent.rag.models import SourceDocument
-from workstation_agent.rag.retriever import HybridSearch
 from workstation_agent.rag.repository import InMemoryIndexRepository
+from workstation_agent.rag.retriever import HybridSearch
 from workstation_agent.tools.contracts import ToolError
 
 
@@ -22,7 +22,9 @@ class ChunkingTests(unittest.TestCase):
             id="doc",
             media_type="text/markdown",
         )
-        return DocumentChunker(RagSettings(chunk_size=size, chunk_overlap=8)).split(document, text)
+        return StructuredChunkingStrategy(RagSettings(chunk_size=size, chunk_overlap=8)).split(
+            document, text
+        )
 
     def test_preserves_crlf_offsets_and_all_nonblank_characters(self):
         text = "# 一级\r\n" + "中文句子。" * 30 + "\r\n## 二级\r\n" + "x" * 120
@@ -88,7 +90,9 @@ class ChunkingTests(unittest.TestCase):
         document = SourceDocument(
             source_uri="a.txt", title="a", checksum="v", media_type="text/plain"
         )
-        chunks = DocumentChunker(RagSettings(chunk_size=32, chunk_overlap=4)).split(document, text)
+        chunks = StructuredChunkingStrategy(RagSettings(chunk_size=32, chunk_overlap=4)).split(
+            document, text
+        )
         self.assertTrue(all(chunk.metadata["heading_path"] is None for chunk in chunks))
         for chunk in chunks:
             self.assertEqual(
@@ -113,7 +117,7 @@ class RankingTests(unittest.TestCase):
             Document(id=f"chunk{i}", page_content="needle", metadata={"source_uri": f"{i}.txt"})
             for i in range(2)
         ]
-        vectors = {doc.id: (1.0, 0.0) for doc in documents}
+        vectors = {doc.id: (1.0, 0.0) for doc in documents if doc.id is not None}
         results = HybridSearch().retrieve(documents, "needle", 20, vectors, [1.0, 0.0])
         self.assertEqual([doc.id for doc in results], ["chunk0", "chunk1"])
         repeated = HybridSearch().retrieve(documents, "needle", 20, vectors, [1.0, 0.0])
@@ -151,6 +155,11 @@ class RagApplicationTests(unittest.TestCase):
     def setUp(self):
         self.repository = InMemoryIndexRepository()
         self.app = RagApplication(self.repository, RagSettings(chunk_size=80, chunk_overlap=8))
+
+    def _snapshot(self, source: str) -> IndexSnapshot:
+        snapshot = self.repository.get(source)
+        assert snapshot is not None
+        return snapshot
 
     def test_ingest_idempotency_update_and_delete(self):
         first = self.app.ingest("a.md", "# 权限\n默认只读。", {"project": "A"})
@@ -195,7 +204,7 @@ class RagApplicationTests(unittest.TestCase):
         backend.fail = True
         with self.assertRaises(RuntimeError):
             app.ingest("a.md", "# 权限\n修改内容。", {})
-        self.assertIn("默认只读", self.repository.get("a.md").chunks[0].page_content)
+        self.assertIn("默认只读", self._snapshot("a.md").chunks[0].page_content)
 
     def test_changed_embedding_configuration_requires_reingest(self):
         self.app.ingest("a.md", "# 权限\n只读。", {})
@@ -207,7 +216,7 @@ class RagApplicationTests(unittest.TestCase):
     def test_old_pipeline_fingerprint_requires_reingest_even_when_source_is_unchanged(self):
         text = "# 权限\n只读。"
         self.app.ingest("a.md", text, {})
-        old = self.repository.get("a.md")
+        old = self._snapshot("a.md")
         self.repository.publish(old.model_copy(update={"fingerprint": "old-handwritten-pipeline"}))
         self.assertEqual(self.app.status()["status"], "needs_reindex")
         with self.assertRaises(ToolError) as caught:
@@ -237,7 +246,7 @@ class RagApplicationTests(unittest.TestCase):
 
     def test_mutating_returned_framework_document_does_not_change_published_snapshot(self):
         self.app.ingest("a.md", "# 权限\n默认只读。", {})
-        snapshot = self.repository.get("a.md")
+        snapshot = self._snapshot("a.md")
         snapshot.chunks[0].page_content = "caller mutated document"
         snapshot.chunks[0].metadata["source_uri"] = "outside.md"
         result = self.app.search("权限", {}, 6)
@@ -246,11 +255,11 @@ class RagApplicationTests(unittest.TestCase):
 
     def test_snapshot_rejects_vectors_for_unknown_ids_without_replacing_published_version(self):
         self.app.ingest("a.md", "# 权限\n只读。", {})
-        snapshot = self.repository.get("a.md")
+        snapshot = self._snapshot("a.md")
         invalid = snapshot.model_copy(update={"vectors": {"unknown": (1.0, 0.0)}})
         with self.assertRaises(ValueError):
             self.repository.publish(invalid)
-        self.assertEqual(self.repository.get("a.md").vectors, {})
+        self.assertEqual(self._snapshot("a.md").vectors, {})
 
     def test_resource_limits_do_not_publish(self):
         app = RagApplication(

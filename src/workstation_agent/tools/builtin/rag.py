@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
+from ...application.rag import RagApplication
 from ...safety.permissions import PermissionLevel
 from ..contracts import PydanticTool, ToolArguments, ToolError
 from ..executor import ToolExecutor
@@ -100,11 +101,11 @@ class IngestDocumentTool(PydanticTool[IngestArguments]):
     permission = PermissionLevel.CONTROLLED_WRITE
     arguments_model = IngestArguments
 
-    def __init__(self, workspace: Path, application):
+    def __init__(self, workspace: Path, application: RagApplication) -> None:
         self.workspace = workspace.resolve()
         self.application = application
 
-    def run(self, arguments):
+    def run(self, arguments: IngestArguments) -> str:
         path = resolve_inside(self.workspace, arguments.path)
         if path.suffix.lower() not in {".md", ".txt"}:
             raise ToolError("only .md and .txt are supported", code="unsupported_format")
@@ -139,10 +140,10 @@ class SearchDocumentsTool(PydanticTool[SearchArguments]):
     permission = PermissionLevel.SAFE_READ
     arguments_model = SearchArguments
 
-    def __init__(self, application):
+    def __init__(self, application: RagApplication) -> None:
         self.application = application
 
-    def run(self, arguments):
+    def run(self, arguments: SearchArguments) -> str:
         return json.dumps(
             self.application.search(arguments.query, arguments.filters, arguments.limit),
             ensure_ascii=False,
@@ -158,11 +159,11 @@ class DeleteDocumentTool(PydanticTool[WorkspacePathArguments]):
     permission = PermissionLevel.CONTROLLED_WRITE
     arguments_model = WorkspacePathArguments
 
-    def __init__(self, workspace: Path, application):
+    def __init__(self, workspace: Path, application: RagApplication) -> None:
         self.workspace = workspace.resolve()
         self.application = application
 
-    def run(self, arguments):
+    def run(self, arguments: WorkspacePathArguments) -> str:
         path = resolve_inside(self.workspace, arguments.path)
         source = path.relative_to(self.workspace).as_posix()
         return json.dumps(self.application.delete(source), ensure_ascii=False)
@@ -180,8 +181,8 @@ class RagStatusTool(PydanticTool[RagStatusArguments]):
     permission = PermissionLevel.SAFE_READ
     arguments_model = RagStatusArguments
 
-    def __init__(self, application):
+    def __init__(self, application: RagApplication) -> None:
         self.application = application
 
-    def run(self, arguments):
+    def run(self, arguments: RagStatusArguments) -> str:
         return json.dumps(self.application.status(), ensure_ascii=False)

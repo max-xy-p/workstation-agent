@@ -1,47 +1,46 @@
 """使用成熟 Markdown 解析器和官方分块器，适配原文位置及章节关联。"""
 
 import re
-from hashlib import sha256
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from markdown_it import MarkdownIt
 
-from .config import RagSettings
-from .models import SourceDocument
+from ..config import RagSettings
+from ..identifiers import stable_id
+from ..models import SourceDocument
+from .contracts import ChunkBudgetExceeded, ChunkingSignature
 
 
-def stable_id(prefix: str, *parts: str) -> str:
-    """用分隔后的内容计算稳定标识，避免重复摄取产生新块。"""
-    return prefix + "_" + sha256(chr(0).join(parts).encode("utf-8")).hexdigest()[:24]
-
-
-class ChunkBudgetExceeded(ValueError):
-    """表示分块数量超过预算，调用方不得发布不完整索引。"""
-
-
-class DocumentChunker:
+class StructuredChunkingStrategy:
     """将解析器行位置映射回原文，分块边界交给官方递归分块器。"""
 
     version = "native-document-v3"
 
-    def __init__(self, settings: RagSettings):
+    def __init__(self, settings: RagSettings) -> None:
         self.settings = settings
         self.parser = MarkdownIt("commonmark").enable("table")
-        shared = dict(
+        self.prose_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
             add_start_index=True,
             strip_whitespace=False,
             keep_separator="end",
-        )
-        self.prose_splitter = RecursiveCharacterTextSplitter(
-            **shared,
             chunk_overlap=settings.chunk_overlap,
             separators=["\r\n\r\n", "\n\n", "\r\n", "\n", "。", "！", "？", ". ", "；", "; ", ""],
         )
         self.atomic_splitter = RecursiveCharacterTextSplitter(
-            **shared, chunk_overlap=0, separators=["\r\n", "\n", ""]
+            chunk_size=settings.chunk_size,
+            add_start_index=True,
+            strip_whitespace=False,
+            keep_separator="end",
+            chunk_overlap=0,
+            separators=["\r\n", "\n", ""],
         )
+
+    @property
+    def signature(self) -> ChunkingSignature:
+        """保留现有版本标记与参数顺序，默认索引不因接口调整而失效。"""
+        return (self.version, self.settings.chunk_size, self.settings.chunk_overlap)
 
     def split(self, document: SourceDocument, text: str) -> tuple[Document, ...]:
         """返回原文片段与同章节关联；字符偏移使用 [start, end)。"""
