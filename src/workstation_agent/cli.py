@@ -16,6 +16,8 @@ from pydantic import __version__ as pydantic_version
 from . import __version__
 from .bootstrap import build_infrastructure, build_tool_application
 from .config import Settings
+from .context.config import ContextConfigurationError
+from .context.state import TaskBoard
 from .tools import ToolResult
 
 _RESULT_ADAPTER = TypeAdapter(ToolResult)
@@ -38,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="run a task with the official LangChain agent")
     run.add_argument("task")
     run.add_argument("--session", help="persist and continue this session ID")
+    run.add_argument(
+        "--new-task", action="store_true", help="start a new task board in this session"
+    )
+    run.add_argument("--constraint", action="append", default=[], help="add a user constraint")
+    run.add_argument("--criterion", action="append", default=[], help="add a completion criterion")
     run.add_argument("--approve-memory-write", action="store_true")
     run.add_argument("--approve-memory-delete", action="store_true")
     run.add_argument("--transport", choices=("mcp", "local"), default="mcp")
@@ -193,10 +200,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Memory extraction chars / candidates / calls: {settings.memory.extract_chars} / "
             f"{settings.memory.extract_limit} / {settings.memory.extract_calls}"
         )
+        print(f"Sessions enabled: {settings.memory.sessions}")
         print(
-            f"Sessions enabled: {settings.memory.sessions}; "
-            f"summary tokens: {settings.memory.summary_tokens}"
+            "Context window: "
+            f"{settings.context.window or '(model profile or explicit config required)'}"
         )
+        print(
+            f"Context output / safety tokens: {settings.context.output_tokens} / "
+            f"{settings.context.safety_tokens}"
+        )
+        print(f"Context summary enabled: {settings.context.summarize}")
+        if settings.context.summarize and not settings.memory.allow_remote:
+            print("Context summary unavailable: MEMORY_ALLOW_REMOTE authorization required")
         print(f"langgraph-checkpoint-sqlite: {version('langgraph-checkpoint-sqlite')}")
         print(f"langmem: {version('langmem')}")
         try:
@@ -216,6 +231,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.agent:
             ready = ready and bool(settings.model and settings.api_key and settings.service_token)
+            try:
+                from .context.budget import resolve_settings
+                from .models.providers.openai import build_chat_model
+
+                budget = resolve_settings(
+                    settings.context, build_chat_model(settings)
+                ).input_budget()
+                print(f"Context input budget: {budget}")
+            except ValueError:
+                print(
+                    "Context budget unavailable: configure CONTEXT_WINDOW and check output limits"
+                )
+                ready = False
         return 0 if ready else 1
 
     if args.command == "rag":
@@ -321,6 +349,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         from .bootstrap import build_agent_application
 
+        status: TaskBoard | None = None
+
+        def receive_status(value: TaskBoard) -> None:
+            nonlocal status
+            status = value
+
         async def execute():
             async with build_agent_application(
                 settings,
@@ -334,10 +368,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.trace
                     else None
                 )
-                return await application.run_task(args.task, session_id=args.session, on_node=trace)
+                return await application.run_task(
+                    args.task,
+                    session_id=args.session,
+                    on_node=trace,
+                    on_status=receive_status,
+                    constraints=tuple(args.constraint),
+                    criteria=tuple(args.criterion),
+                    new_task=args.new_task,
+                )
 
         try:
             result = asyncio.run(execute())
+        except ContextConfigurationError as exc:
+            print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
+            return 2
         except Exception:
             print(
                 json.dumps(
@@ -346,7 +391,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 1
-        print(json.dumps(asdict(result), ensure_ascii=False, default=str))
+        print(
+            json.dumps({**asdict(result), "task_status": status}, ensure_ascii=False, default=str)
+        )
         return (
             0
             if result.status.value == "completed"

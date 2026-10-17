@@ -18,8 +18,9 @@ uv run workstation-agent run "读取 .python-version 并解释项目需要的 Py
 
 ```text
 CLI / 后续界面 → build_agent_application → AgentApplication.run_task
-    → ContextBuilder 组装消息
+    → 注入可信任务信息和受控检索入口
     → 官方 create_agent 图
+        → Context 中间件刷新候选、更新状态并检查最终请求预算
         → 官方 ChatOpenAI 模型集成
         → 官方 StructuredTool
             → 官方 MCP SDK → Workstation ToolApplication → ToolExecutor → 文件工具
@@ -29,7 +30,7 @@ CLI / 后续界面 → build_agent_application → AgentApplication.run_task
 `agent/factory.py` 组装官方 Agent、调用次数限制和重复 RAG 查询防护中间件。
 OpenAI 兼容集成限制在 models/providers/，包括聊天与 RAG 模型适配器。
 `tools/mcp_client.py` 管理 MCP 连接；`tools/langchain.py` 将能力目录和结果转换为官方工具。
-`application/service.py` 消费图更新、组装上下文并返回业务结果，不自行调用模型或决定循环分支。
+`application/service.py` 消费图更新、提供上下文运行数据并返回业务结果，不自行调用模型或决定循环分支。
 
 ## 状态、消息与错误
 
@@ -72,3 +73,9 @@ RAG 已通过默认 search_documents 工具接入，证据使用 Context 模块�
   用实际 ChatOpenAI / OpenAI SDK 请求验证模型 → 工具 → 模型完整协议链。
 - 参数和越界错误返回模型；供应商 HTTP 错误转为安全的任务失败。
 - 这些离线测试验证接口和编排，不代表已验证某个外部模型的推理质量。
+
+## 上下文与状态栏
+
+每次模型调用都执行统一预算，具体压缩规则和 CONTEXT_* 配置见 [上下文管理](context.md)。
+任务状态栏属于官方 AgentState；CLI 在 task_status 返回，应用通过 on_status 回调提供更新。
+状态栏不自动写入长期记忆。必要内容超限时以 context_limit_exceeded 停止，不发送该请求。

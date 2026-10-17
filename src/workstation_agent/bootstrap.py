@@ -1,9 +1,10 @@
 """组装应用与外围适配器，不在构造只读入口时创建索引。"""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+from langchain_core.tools import BaseTool
 from pydantic import JsonValue
 
 from .application import AgentApplication, ToolApplication
@@ -310,10 +311,10 @@ async def build_agent_application(
             policy,
         )
     extraction, summary_model = None, None
-    if settings.memory.auto_extract or (checkpointer and settings.memory.allow_remote):
+    if settings.memory.auto_extract or settings.context.summarize:
         from .models.providers.memory import AuthorizedMemoryModel, LangMemExtractor
 
-        if checkpointer and settings.memory.allow_remote:
+        if settings.context.summarize and settings.memory.allow_remote:
             summary_model = AuthorizedMemoryModel(delegate=model, policy=policy, max_calls=1)
         if settings.memory.auto_extract:
             from .tools.extraction import MemoryExtractionTool
@@ -336,7 +337,7 @@ async def build_agent_application(
                 )
             )
 
-    def application(tools):
+    def application(tools: Sequence[BaseTool]) -> AgentApplication:
         # 本机记忆目录取代远端同名能力，身份不由远端服务或模型参数决定。
         names = {
             "remember_memory",
@@ -357,7 +358,7 @@ async def build_agent_application(
             max_search_calls=settings.rag.max_search_calls,
             checkpointer=checkpointer,
             summary_model=summary_model,
-            summary_tokens=settings.memory.summary_tokens,
+            context_settings=settings.context,
         )
         return AgentApplication(
             graph,

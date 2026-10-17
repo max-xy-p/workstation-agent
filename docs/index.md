@@ -16,6 +16,8 @@
 | [工具模块](tools.md) | 使用者与开发人员 | LangGraph 工具调用入口、参数、权限及验收 |
 | [本机服务](local-service.md) | 使用者与 Agent 开发人员 | 本机部署、MCP 通信、认证和独立进程验收 |
 | [功能模块](modules.md) | 产品与开发人员 | 模块职责、完成状态、依赖关系和下一步 |
+| [上下文管理](context.md) | 使用者与开发人员 | 请求预算、压缩、任务状态栏、配置与保留边界 |
+| [上下文管理方案](context-design.md) | 产品与开发人员 | 已确认方案及实现范围 |
 | [Agent 运行机制](agent.md) | Agent 开发人员 | 状态机、执行序列、错误和扩展点 |
 | [开发指南](development.md) | 贡献者 | 环境、命令、添加 Provider/Tool/Repository 的流程 |
 | [开发约定](../AGENTS.md) | AI Agent 与贡献者 | 仓库边界、编码规则、测试和完成定义 |

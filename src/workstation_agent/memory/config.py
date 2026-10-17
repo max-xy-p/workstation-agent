@@ -27,7 +27,6 @@ class MemorySettings:
     extract_chars: int = 6000
     extract_limit: int = 5
     extract_calls: int = 3
-    summary_tokens: int = 12000
 
     def __post_init__(self):
         for name in ("enabled", "sessions", "auto_extract", "allow_remote"):
@@ -40,7 +39,6 @@ class MemorySettings:
             "extract_chars",
             "extract_limit",
             "extract_calls",
-            "summary_tokens",
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
@@ -83,7 +81,6 @@ class MemorySettings:
                         ("extract_chars", 6000),
                         ("extract_limit", 5),
                         ("extract_calls", 3),
-                        ("summary_tokens", 12000),
                     )
                 },
             )

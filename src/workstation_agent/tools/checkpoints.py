@@ -6,6 +6,7 @@ import re
 from contextlib import contextmanager
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.runnables import RunnableConfig
 
 from ..safety import PermissionLevel
 from .effects import authorized_operation
@@ -18,7 +19,7 @@ class AuthorizedCheckpointer(BaseCheckpointSaver):
         super().__init__(serde=backend.serde)
         self.backend, self.access, self.policy = backend, access, policy
 
-    def config(self, session_id):
+    def config(self, session_id: str) -> RunnableConfig:
         """外部会话名映射为身份隔离的框架 thread_id。"""
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
             raise ValueError("会话标识只能包含字母、数字、下划线和连字符")

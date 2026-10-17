@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.language_models.model_profile import ModelProfile
 
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication
@@ -19,8 +20,10 @@ from workstation_agent.tools.langchain import local_tools
 
 class ScriptedModel(FakeMessagesListChatModel):
     """仅用于离线测试，使用官方消息模型重放确定性回复。"""
+    profile: ModelProfile | None = {"max_input_tokens": 32768, "max_output_tokens": 8192}
+
     def bind_tools(self, tools, **kwargs):
-        return self
+        return self.bind(**kwargs)
 
 
 def call_message(name="read_text_file", arguments=None):

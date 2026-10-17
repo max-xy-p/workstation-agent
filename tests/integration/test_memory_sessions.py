@@ -16,6 +16,7 @@ from workstation_agent.bootstrap import (
 )
 from workstation_agent.config import Settings
 from workstation_agent.context import ContextBuilder
+from workstation_agent.context.config import ContextSettings
 from workstation_agent.memory.config import MemorySettings
 from workstation_agent.safety import PermissionRequired
 from workstation_agent.storage.sqlite.sessions import SQLiteSessionBackend
@@ -144,7 +145,13 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             delegate=model, policy=MemoryApprovalPolicy(remote=True), max_calls=1
         )
         app = AgentApplication(
-            build_agent(model, [], checkpointer=saver, summary_model=summary, summary_tokens=100),
+            build_agent(
+                model,
+                [],
+                checkpointer=saver,
+                summary_model=summary,
+                context_settings=ContextSettings(window=16000, trigger_ratio=0.25),
+            ),
             checkpointer=saver,
         )
         for i in range(8):
@@ -196,3 +203,35 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         memory = build_memory_application(settings)
         self.assertEqual(memory.search("喜欢中文")[0].content, "用户喜欢中文")
         self.assertTrue(settings.session_database_path.exists())
+
+    async def test_task_board_survives_restart_and_user_can_start_new_task(self) -> None:
+        saver = self.saver()
+        app = AgentApplication(
+            build_agent(
+                ScriptedModel(responses=[AIMessage(content="好的")]), [], checkpointer=saver
+            ),
+            checkpointer=saver,
+        )
+        await app.run_task(
+            "初始目标", session_id="board", constraints=("只读",), criteria=("列出结果",)
+        )
+        restarted = self.saver()
+        app = AgentApplication(
+            build_agent(
+                ScriptedModel(responses=[AIMessage(content="继续")]), [], checkpointer=restarted
+            ),
+            checkpointer=restarted,
+        )
+        await app.run_task("补充要求", session_id="board", constraints=("使用中文",))
+        board = restarted.get_tuple(restarted.config("board")).checkpoint["channel_values"][
+            "task_board"
+        ]
+        self.assertEqual(board["goal"], "初始目标")
+        self.assertEqual(board["constraints"], ["只读", "使用中文"])
+        self.assertEqual(board["current_request"], "补充要求")
+        await app.run_task("新任务", session_id="board", new_task=True)
+        board = restarted.get_tuple(restarted.config("board")).checkpoint["channel_values"][
+            "task_board"
+        ]
+        self.assertEqual(board["goal"], "新任务")
+        self.assertEqual(board["constraints"], [])

@@ -25,13 +25,11 @@ class ContextBuilderTests(unittest.TestCase):
         RagApplication(repository, RagSettings()).ingest("README.md", "Python setup guide", {})
         chunks = list(repository.get("README.md").chunks)
         retriever = RunnableLambda(lambda query: HybridSearch.lexical(chunks, query, 5))
-        messages, sources = ContextBuilder(memory=memory, retriever=retriever).build(
-            "Python setup", "Be helpful"
-        )
-        self.assertIn("Use Python", messages[1].content)
-        self.assertIn("README", messages[1].content)
-        self.assertEqual(sources.memory_ids, (record.id,))
-        self.assertEqual(sources.chunk_ids, (chunks[0].id,))
+        items = ContextBuilder(memory=memory, retriever=retriever).retrieve("Python setup")
+        self.assertIn("Use Python", items[0].content)
+        self.assertIn("README", items[1].content)
+        self.assertEqual(items[0].id, record.id)
+        self.assertEqual(items[1].id, chunks[0].id)
 
     def test_memory_budget_drops_whole_note(self):
         scope = MemoryAccess(user_id="local", workspace_id="ws").scope()
@@ -40,9 +38,8 @@ class ContextBuilderTests(unittest.TestCase):
             scope=scope,
             sources=(MemorySource(origin="explicit", run_id="run"),),
         )
-        messages, sources = ContextBuilder(
+        items = ContextBuilder(
             memory=SimpleNamespace(search=lambda _: (note,)),
             max_memory_chars=100,
-        ).build("Python", "system")
-        self.assertEqual(sources.memory_ids, ())
-        self.assertEqual(len(messages), 2)
+        ).retrieve("Python")
+        self.assertEqual(items, [])

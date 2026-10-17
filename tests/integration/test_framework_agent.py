@@ -74,6 +74,7 @@ class FrameworkAgentIntegrationTests(unittest.TestCase):
             "WORKSTATION_AGENT_API_KEY": "test-api-key-private",
             "WORKSTATION_AGENT_BASE_URL": f"http://127.0.0.1:{cls.api.server_port}/v1",
             "WORKSTATION_AGENT_MODEL_TIMEOUT": "10",
+            "WORKSTATION_AGENT_CONTEXT_WINDOW": "32768",
             "WORKSTATION_AGENT_MAX_STEPS": "4",
             "WORKSTATION_AGENT_MAX_TOOL_CALLS": "4",
             "LANGSMITH_TRACING": "false",
@@ -92,11 +93,13 @@ class FrameworkAgentIntegrationTests(unittest.TestCase):
         response = json.loads(process.stdout)
         self.assertEqual(response["status"], "completed")
         self.assertEqual(response["answer"], "你好，本机服务")
-        self.assertEqual([s["kind"] for s in response["steps"]], ["model", "tool", "model"])
+        self.assertEqual([s["kind"] for s in response["steps"] if s["name"] != "context_usage"], ["model", "tool", "model"])
         self.assertIn("langgraph: tools", process.stderr)
         self.assertNotIn("你好，本机服务", process.stderr)
         request = CompatibleAPIHandler.requests[-1]
         self.assertEqual(request["model"], "test-model")
+        self.assertEqual(request.get("max_completion_tokens", request.get("max_tokens")), 2048)
+        self.assertEqual(response["task_status"]["goal"], "读取 hello.txt")
         assistant = next(m for m in request["messages"] if m["role"] == "assistant")
         tool = next(m for m in request["messages"] if m["role"] == "tool")
         self.assertEqual(assistant["tool_calls"][0]["id"], tool["tool_call_id"])

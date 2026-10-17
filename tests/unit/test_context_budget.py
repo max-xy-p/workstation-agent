@@ -38,13 +38,11 @@ class ContextBudgetTests(unittest.TestCase):
                 fragment("two", "long" * 100),
             ]
         )
-        messages, sources = ContextBuilder(retriever=retriever, max_context_chars=100).build(
-            "query", "system"
-        )
-        self.assertEqual(sources.chunk_ids, ("one",))
-        self.assertIn("short", messages[1].content)
-        self.assertNotIn("long", messages[1].content)
-        self.assertNotIn("truncated", messages[1].content)
+        items = ContextBuilder(retriever=retriever, max_context_chars=100).retrieve("query")
+        self.assertEqual([item.id for item in items], ["one"])
+        self.assertIn("short", items[0].content)
+        self.assertNotIn("long", items[0].content)
+        self.assertNotIn("truncated", items[0].content)
 
     def test_expansion_does_not_discard_seed_and_bridging_overlap_is_deduplicated(self):
         original = "abcdefghij"

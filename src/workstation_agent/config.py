@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .context.config import ContextSettings
 from .memory.config import MemorySettings
 from .rag.config import RagSettings
 
@@ -45,6 +46,7 @@ class Settings:
     rag: RagSettings = field(default_factory=RagSettings)
 
     memory: MemorySettings = field(default_factory=MemorySettings)
+    context: ContextSettings = field(default_factory=ContextSettings)
 
     @property
     def memory_database_path(self) -> Path:
@@ -161,4 +163,5 @@ class Settings:
             service_token=os.getenv("WORKSTATION_AGENT_SERVICE_TOKEN") or None,
             rag=RagSettings.from_env(),
             memory=MemorySettings.from_env(),
+            context=ContextSettings.from_env(),
         )

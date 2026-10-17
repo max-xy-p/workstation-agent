@@ -49,7 +49,7 @@ MemoryService 先限定用户/工作区/当前项目并排除过期记录，再�
 策略只返回 ID 和分数，服务检查 ID 后从本次候选取回原文；检索策略可单独替换，见 [检索策略](retrieval.md)。
 这是词项召回，不保证同义改写的语义召回；当前无需 embedding、向量服务或额外网络请求。
 记忆条数和字符预算独立限制；无相关内容不注入，超预算按整条丢弃。
-ContextSources 对应的实际 ID 记录到 Run 的 context_sources 步骤中，不记录正文。
+实际选入的来源及版本记录到 Run 的 context_sources 和 context_usage 步骤中，不记录正文。
 
 动态记忆经官方模型调用中间件瞬时注入，不追加到检查点消息历史。工具检索结果统一标为数据。
 记忆不覆盖当前要求、系统规则和权限；外部文档事实由独立 RAG 提供引用证据。
@@ -69,8 +69,8 @@ uv run workstation-agent session clear project-chat --approve-delete
 
 使用官方 SqliteSaver，业务 RunRepository 不承担恢复能力。运行与清除通过本机文件锁互斥，
 同一会话跨进程忙碌时拒绝操作；锁文件只有占位字节，不含消息正文。
-未授权额外模型出站时使用官方 trim_messages；授权后使用官方 SummarizationMiddleware，
-摘要请求同样经过敏感操作策略，每次运行最多一次。会话恢复不等于工具审批恢复；
+无论是否保存会话，都执行统一请求预算与官方裁剪。仅当 CONTEXT_SUMMARIZE=true
+且 MEMORY_ALLOW_REMOTE=true 时尝试官方摘要；每次运行最多一次。详见 [上下文管理](context.md)。会话恢复不等于工具审批恢复；
 失败或等待审批后不承诺继续原执行点，应清除会话或开启新会话重试。
 
 持久化时保留消息协议和调用 ID，原始工具正文/artifact 替换为占位符，已知 API Key、
@@ -124,14 +124,13 @@ SQLite 空闲页、备份及已出站内容不属于应用层删除的物理擦�
 | PROJECT_ID | 空 | 当前项目；缺省时不读取任何项目范围 |
 | SESSIONS_ENABLED | false | 默认持久化会话；--session 可单次启用 |
 | MEMORY_AUTO_EXTRACT | false | 成功任务后的有界提取 |
-| MEMORY_ALLOW_REMOTE | false | 单独授权提取和会话摘要的额外模型请求 |
+| MEMORY_ALLOW_REMOTE | false | 单独授权提取和上下文摘要的额外模型请求 |
 | MEMORY_CONTEXT_CHARS | 4000 | 实际注入记忆的字符预算 |
 | MEMORY_SEARCH_LIMIT | 5 | 默认 Context 召回条数，最大 20 |
 | MEMORY_MAX_RECORDS | 2000 | 每个命名空间的记录上限，最大 10000，含过期记录 |
 | MEMORY_EXTRACT_CHARS | 6000 | 当前用户消息与已有记忆正文的提取预算 |
 | MEMORY_EXTRACT_LIMIT | 5 | 单批候选上限，最大 20 |
 | MEMORY_EXTRACT_CALLS | 3 | 单批模型请求上限，最大 8；没有自动网络重试 |
-| MEMORY_SUMMARY_TOKENS | 12000 | 历史裁剪/摘要触发预算，摘要保留最近 8 条消息 |
 | DATA_DIR | 工作区下 .workstation-agent | memory.db 与 sessions.db 所在目录，必须位于工作区内 |
 
 EXTRACT_CHARS 约束文本内容，不代表包含框架 schema 和提示词后的精确 token 预算。
@@ -155,3 +154,5 @@ SQLite 长期适配是本机持久化的能力缺口：官方 Store 集成未列
 验收包括作用域/无关召回回归、重启 CRUD、版本冲突、事务回滚、水位、过期、秘密拒绝、
 真实 CLI、官方检查点续聊、会话清除、瞬时注入、真实 LangMem 离线协议及提取失败保留主结果。
 执行仓库 unittest discover、doctor 和 uv build；离线夹具不代表已验证外部模型提取准确率。
+
+旧 MEMORY_SUMMARY_TOKENS 配置已移除；历史、记忆和工具共用 CONTEXT_* 预算，不再单独设历史阈值。

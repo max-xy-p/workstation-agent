@@ -1,19 +1,24 @@
 """在官方 Agent 中间件边界阻止重复的无进展检索。"""
 
 import json
+from collections.abc import Awaitable, Callable
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.types import Command
+
+from ..context.state import ContextAgentState, ContextRuntime
 
 
 class RagSearchStopped(RuntimeError):
     """表示检索预算之外的重复查询，携带安全的停止原因。"""
 
 
-class RagSearchGuard(AgentMiddleware):
+class RagSearchGuard(AgentMiddleware[ContextAgentState, ContextRuntime]):
     """按本次图消息识别重复查询，不在实例中保留跨任务状态。"""
 
-    def _check(self, request):
+    def _check(self, request: ToolCallRequest) -> None:
         seen = set()
         messages = request.state["messages"]
         start = max(
@@ -30,10 +35,18 @@ class RagSearchGuard(AgentMiddleware):
                             raise RagSearchStopped("重复检索没有新增证据需求")
                         seen.add(key)
 
-    def wrap_tool_call(self, request, handler):
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
         self._check(request)
         return handler(request)
 
-    async def awrap_tool_call(self, request, handler):
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage | Command:
         self._check(request)
         return await handler(request)

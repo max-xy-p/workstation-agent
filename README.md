@@ -12,6 +12,8 @@ uv sync
 $env:WORKSTATION_AGENT_MODEL = '你的模型名称'
 $env:WORKSTATION_AGENT_BASE_URL = 'https://你的模型服务地址/v1'
 $env:WORKSTATION_AGENT_API_KEY = '你的模型服务密钥'
+# 替换为实际模型窗口，32768 仅为示例。
+$env:WORKSTATION_AGENT_CONTEXT_WINDOW = '32768'
 $service = & .\scripts\start-local-service.ps1
 uv run workstation-agent doctor --agent
 uv run workstation-agent run "读取 .python-version 并回答项目需要的 Python 版本" --trace
@@ -65,3 +67,5 @@ uv build
 ```
 
 [文档索引](docs/index.md) · [功能状态](docs/modules.md) · [架构](docs/architecture.md) · [开发约定](AGENTS.md)
+
+上下文预算、分级压缩与任务状态栏见 [上下文管理](docs/context.md)。自定义模型运行前需配置真实上下文窗口。

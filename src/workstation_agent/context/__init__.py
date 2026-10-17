@@ -1,3 +1,5 @@
-from .builder import ContextBuilder, ContextSources
+"""统一的请求上下文入口。"""
 
-__all__ = ["ContextBuilder", "ContextSources"]
+from .builder import ContextBuilder
+
+__all__ = ["ContextBuilder"]
