@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from langchain.agents import AgentState
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 if TYPE_CHECKING:
     from .builder import ContextBuilder
@@ -23,11 +23,11 @@ class ResultReference(TypedDict):
 
 
 class TaskItem(TypedDict):
-    """保存一个任务项；完成状态必须引用成功工具结果或用户确认。"""
+    """保存一个任务项；模型只能报告待确认，完成状态由用户入口验收。"""
 
     id: str
     text: str
-    status: Literal["pending", "in_progress", "completed", "blocked"]
+    status: Literal["pending", "in_progress", "pending_confirmation", "completed", "blocked"]
     evidence: list[str]
 
 
@@ -39,10 +39,9 @@ class TaskFact(TypedDict):
     confirmed: bool
 
 
-class TaskBoard(TypedDict):
+class _TaskBoardFields(TypedDict):
     """保存当前任务的紧凑工作状态，不代替对话或长期记忆。"""
 
-    schema_version: Literal[1]
     task_id: str
     session_id: str
     updated_at: str
@@ -57,10 +56,35 @@ class TaskBoard(TypedDict):
     next_action: str
 
 
+class TaskBoard(_TaskBoardFields):
+    """格式 2 增加明确的验收版本，只有用户入口才能确认任务完成。"""
+
+    schema_version: Literal[2]
+    revision: int
+
+
+class LegacyTaskBoard(_TaskBoardFields):
+    """读取格式 1 的旧检查点，迁移后不保留旧的自动完成判断。"""
+
+    schema_version: Literal[1]
+
+
+class RunControlState(TypedDict):
+    """记录运行身份和绝对截止时间，审批等待与重启不能重置任务预算。"""
+
+    schema_version: Literal[1]
+    run_id: str
+    task: str
+    deadline: float
+    closed: bool
+
+
 class ContextAgentState(AgentState):
     """为官方 AgentState 增加版本化任务状态，不建立第二套运行状态机。"""
 
     task_board: NotRequired[TaskBoard]
+    run_control: NotRequired[RunControlState]
+    summary_calls: NotRequired[int]
 
 
 class ContextUsage(TypedDict):
@@ -92,6 +116,7 @@ class ContextRuntime:
     new_task: bool = False
     builder: ContextBuilder | None = None
     board: TaskBoard | None = None
+    board_view: dict[str, JsonValue] | None = None
     usages: list[ContextUsage] = field(default_factory=list)
     summary_calls: int = 0
     summary_reasons: list[str] = field(default_factory=list)
@@ -126,11 +151,22 @@ class ContextItem:
 _BOARD = TypeAdapter(TaskBoard)
 
 
-def restore_board(value: TaskBoard | None) -> TaskBoard | None:
+def restore_board(value: TaskBoard | LegacyTaskBoard | None) -> TaskBoard | None:
     """迁移旧检查点：没有状态栏的旧格式按空状态处理，未知版本拒绝读取。"""
     if value is None:
         return None
-    return _BOARD.validate_python(value)
+    restored = dict(value)
+    if restored.get("schema_version") == 1:
+        # 旧格式只检查引用是否成功，不能据此保留已验收的含义。
+        restored["schema_version"] = 2
+        restored["revision"] = 0
+        restored["items"] = [
+            {**item, "status": "pending_confirmation"}
+            if item["status"] == "completed"
+            else dict(item)
+            for item in value["items"]
+        ]
+    return _BOARD.validate_python(restored)
 
 
 def utc_now() -> str:

@@ -224,7 +224,7 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
         ]
         failed = AsyncMock(side_effect=ValueError("private-summary-failure"))
         with patch("workstation_agent.agent.context.SummarizationMiddleware.abefore_model", failed):
-            await graph.ainvoke({"messages": history}, context=runtime)
+            await graph.ainvoke({"messages": history}, config={"configurable": {"thread_id": "test"}}, context=runtime)
         self.assertEqual(failed.await_count, 1)
         self.assertEqual(runtime.summary_calls, 1)
         self.assertEqual(len(model.requests), 2)
@@ -256,7 +256,7 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
             ),
             self.assertRaises(NodeCancelledError) as caught,
         ):
-            await graph.ainvoke({"messages": history}, context=ContextRuntime(task="当前要求"))
+            await graph.ainvoke({"messages": history}, config={"configurable": {"thread_id": "test"}}, context=ContextRuntime(task="当前要求"))
         self.assertIsInstance(caught.exception.__cause__, asyncio.CancelledError)
         self.assertEqual(model.requests, [])
 
@@ -281,7 +281,8 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime = ContextRuntime(task="找文档")
         await build_agent(model, [tool]).ainvoke(
-            {"messages": [HumanMessage("找文档")]}, context=runtime
+            {"messages": [HumanMessage("找文档")]},
+            config={"configurable": {"thread_id": "test"}}, context=runtime
         )
         bodies = "\n".join(m.text for m in model.requests[-1] if isinstance(m, ToolMessage))
         self.assertEqual(bodies.count("独特原文正文"), 1)
@@ -414,7 +415,7 @@ class ContextBoundaryTests(unittest.TestCase):
         board = initialize([HumanMessage("用户目标", id="user")], None, ContextRuntime())
         with self.assertRaises(ValueError):
             UpdateStatusArguments.model_validate({"goal": "篡改目标"})
-        operation = UpdateTaskStatusTool(board, {"source": "实际工具结果"}, set())
+        operation = UpdateTaskStatusTool(board, {"source": "实际工具结果"})
         with self.assertRaises(ToolError):
             operation.run(
                 UpdateStatusArguments.model_validate(

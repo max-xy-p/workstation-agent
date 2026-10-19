@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 
 import uvicorn
@@ -26,31 +25,56 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .. import __version__
 from ..application.tools import ToolApplication
 from ..config import Settings
+from ..domain.execution import ExecutionControl
 from ..tools import ToolResult
+from ..tools.execution import EXECUTION, ToolGrant, approved_call, execute_blocking
 
 _RESULT = TypeAdapter(ToolResult)
 
 
 def build_mcp_server(application: ToolApplication) -> Server:
     """将应用的工具列表和调用结果转换为 MCP 格式。"""
+
     async def list_tools(
-        context: ServerRequestContext, params: PaginatedRequestParams | None,
+        context: ServerRequestContext,
+        params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
-        return ListToolsResult(tools=[
-            Tool(
-                name=item["name"], description=item["description"],
-                input_schema=item["parameters"], output_schema=_RESULT.json_schema(),
-                annotations=ToolAnnotations(read_only_hint=item["permission"] == "SAFE_READ"),
-            ) for item in application.tool_catalog()
-        ])
+        return ListToolsResult(
+            tools=[
+                Tool(
+                    name=item["name"],
+                    description=item["description"],
+                    input_schema=item["parameters"],
+                    output_schema=_RESULT.json_schema(),
+                    annotations=ToolAnnotations(read_only_hint=item["permission"] == "SAFE_READ"),
+                )
+                for item in application.tool_catalog()
+            ]
+        )
 
     async def call_tool(
-        context: ServerRequestContext, params: CallToolRequestParams,
+        context: ServerRequestContext,
+        params: CallToolRequestParams,
     ) -> CallToolResult:
         # 在线程中调用应用入口，避免文件读取阻塞 HTTP 请求处理。
-        result = await asyncio.to_thread(
-            application.execute_tool, params.name, params.arguments or {},
-        )
+        # 审批通过 MCP 元数据传递，不能放入模型可填写的工具参数。
+        # HTTP 入口已校验服务令牌；授权仍绑定指定工具与完整原始参数。
+        meta = params.meta or {}
+        grant_data = meta.get("workstation_approval")
+        grant = ToolGrant.model_validate(grant_data) if grant_data is not None else None
+        arguments = params.arguments or {}
+        if grant is not None and grant != ToolGrant.for_call(params.name, arguments):
+            raise ValueError("审批范围与工具请求不符")
+        deadline = meta.get("workstation_deadline")
+        control = ExecutionControl(float(deadline)) if isinstance(deadline, int | float) else None
+        token = EXECUTION.set(control)
+        try:
+            with approved_call(grant):
+                result = await execute_blocking(
+                    lambda: application.execute_tool(params.name, arguments)
+                )
+        finally:
+            EXECUTION.reset(token)
         return CallToolResult(
             content=[TextContent(type="text", text=_RESULT.dump_json(result).decode("utf-8"))],
             structured_content=_RESULT.dump_python(result, mode="json"),
@@ -58,7 +82,9 @@ def build_mcp_server(application: ToolApplication) -> Server:
         )
 
     return Server(
-        "workstation-agent", version=__version__, on_list_tools=list_tools,
+        "workstation-agent",
+        version=__version__,
+        on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
 
@@ -99,13 +125,18 @@ def build_local_service(application: ToolApplication, settings: Settings) -> ASG
         raise ValueError("configured workspace must be an existing directory")
 
     async def health(request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "service": "workstation-agent", "version": __version__})
+        return JSONResponse(
+            {"status": "ok", "service": "workstation-agent", "version": __version__}
+        )
 
     port = settings.service_port
     server = build_mcp_server(application)
     app = server.streamable_http_app(
-        stateless_http=True, json_response=True, max_request_body_size=65_536,
-        host="127.0.0.1", debug=False,
+        stateless_http=True,
+        json_response=True,
+        max_request_body_size=65_536,
+        host="127.0.0.1",
+        debug=False,
         transport_security=TransportSecuritySettings(
             allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}"],
             allowed_origins=[f"http://127.0.0.1:{port}", f"http://localhost:{port}"],
@@ -120,8 +151,12 @@ def run_local_service(application: ToolApplication, settings: Settings) -> None:
     app = build_local_service(application, settings)
     try:
         uvicorn.run(
-            app, host="127.0.0.1", port=settings.service_port,
-            access_log=False, log_level="warning", proxy_headers=False,
+            app,
+            host="127.0.0.1",
+            port=settings.service_port,
+            access_log=False,
+            log_level="warning",
+            proxy_headers=False,
         )
     except SystemExit as exc:
         # 将服务启动失败统一转换为 CLI 错误。

@@ -58,7 +58,7 @@ class RagAgentScenarios(unittest.IsolatedAsyncioTestCase):
             self.tools,
         )
         state = await graph.ainvoke(
-            {"messages": [{"role": "user", "content": "谁检查工具权限，写入有什么要求？"}]}
+            {"messages": [{"role": "user", "content": "谁检查工具权限，写入有什么要求？"}]}, config={"configurable": {"thread_id": "test"}}
         )
         outputs = [message for message in state["messages"] if isinstance(message, ToolMessage)]
         self.assertEqual([m.tool_call_id for m in outputs], ["hop1", "hop2"])

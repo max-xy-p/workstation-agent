@@ -46,7 +46,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             (root / "note.txt").write_text("你好", encoding="utf-8")
             tools = local_tools(build_tool_application(Settings(root)))
             graph = build_agent(ScriptedModel(responses=[call_message(), AIMessage(content="已读取")]), tools)
-            state = await graph.ainvoke({"messages": [{"role": "user", "content": "读取文件"}]})
+            state = await graph.ainvoke({"messages": [{"role": "user", "content": "读取文件"}]}, config={"configurable": {"thread_id": "test"}})
             message = next(m for m in state["messages"] if isinstance(m, ToolMessage))
             self.assertEqual(message.tool_call_id, "call_1")
             self.assertEqual(message.artifact["content"], "你好")
@@ -60,7 +60,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                                     ({"path": "../secret"}, "path_outside_workspace")]:
                 with self.subTest(code=code):
                     graph = build_agent(ScriptedModel(responses=[call_message(arguments=arguments), AIMessage(content="说明失败")]), tools)
-                    state = await graph.ainvoke({"messages": [{"role": "user", "content": "读取文件"}]})
+                    state = await graph.ainvoke({"messages": [{"role": "user", "content": "读取文件"}]}, config={"configurable": {"thread_id": "test"}})
                     message = next(m for m in state["messages"] if isinstance(m, ToolMessage))
                     self.assertEqual(message.status, "error")
                     self.assertEqual(json.loads(message.content)["error_code"], code)

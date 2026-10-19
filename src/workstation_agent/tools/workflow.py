@@ -16,6 +16,7 @@ from .executor import ToolExecutor, ToolResult
 
 class ToolWorkflowState(TypedDict, total=False):
     """保存单次工具调用在图中传递的请求和结果。"""
+
     # 要调用的工具名称。
     name: str
     # 未经请求校验的原始参数。
@@ -29,6 +30,7 @@ class ToolWorkflowState(TypedDict, total=False):
 @dataclass(frozen=True, slots=True)
 class ToolExecutionUpdate:
     """通知已完成的节点及其产生的结果。"""
+
     # 刚完成的图节点名称。
     node: str
     # 该节点产生的结果，没有时为 None。
@@ -48,19 +50,28 @@ class ToolWorkflow:
             "validate_request", self._route, {"execute_tool": "execute_tool", "finish": END}
         )
         builder.add_edge("execute_tool", END)
-        self.graph = builder.compile()
+        # 单次工具校验流不保存检查点，避免继承外层会话并持久化原始工具结果。
+        self.graph = builder.compile(checkpointer=False)
 
     def _validate_request(self, state: ToolWorkflowState) -> dict[str, Any]:
         """检查请求格式，错误时生成失败结果。"""
         try:
-            request = ToolRequest.model_validate({
-                "name": state["name"], "arguments": state["raw_arguments"],
-            })
+            request = ToolRequest.model_validate(
+                {
+                    "name": state["name"],
+                    "arguments": state["raw_arguments"],
+                }
+            )
         except ValidationError:
-            return {"result": ToolResult(
-                tool_name=state["name"], content="Tool error: arguments must be a JSON object",
-                success=False, error="arguments must be a JSON object", error_code="invalid_arguments",
-            )}
+            return {
+                "result": ToolResult(
+                    tool_name=state["name"],
+                    content="Tool error: arguments must be a JSON object",
+                    success=False,
+                    error="arguments must be a JSON object",
+                    error_code="invalid_arguments",
+                )
+            }
         return {"request": request}
 
     def _route(self, state: ToolWorkflowState) -> str:
@@ -74,8 +85,11 @@ class ToolWorkflow:
             result = self.executor.execute(request.name, request.arguments)
         except PermissionRequired:
             result = ToolResult(
-                tool_name=request.name, content="Tool error: approval required",
-                success=False, error="approval required", error_code="permission_required",
+                tool_name=request.name,
+                content="Tool error: approval required",
+                success=False,
+                error="approval required",
+                error_code="permission_required",
             )
         return {"result": result}
 

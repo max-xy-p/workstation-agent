@@ -365,6 +365,7 @@ async def build_agent_application(
             context=ContextBuilder(memory=memory, max_memory_chars=settings.memory.context_chars),
             checkpointer=checkpointer,
             extraction=extraction,
+            run_timeout=settings.run_timeout,
         )
 
     if transport == "mcp":

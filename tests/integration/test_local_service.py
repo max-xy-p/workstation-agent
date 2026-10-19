@@ -237,3 +237,35 @@ try {
                 self.assertEqual(process.returncode, expected, process.stderr)
                 self.assertNotIn(self.secret, process.stdout + process.stderr)
                 self.assertNotIn("Traceback", process.stderr)
+
+    def test_remote_tool_approval_resumes_without_global_write_permission(self) -> None:
+        from langchain_core.messages import AIMessage
+        from tests.test_agent import ScriptedModel
+        from tests.unit.test_context_management import call
+        from workstation_agent.agent.factory import build_agent
+        from workstation_agent.application import AgentApplication
+        from workstation_agent.config import Settings
+        from workstation_agent.tools.mcp_client import workstation_tools
+
+        async def execute() -> None:
+            settings = Settings(self.workspace, service_port=self.port, service_token=self.secret)
+            async with workstation_tools(settings) as tools:
+                model = ScriptedModel(responses=[
+                    call("ingest_document", {"path": "hello.txt"}, "index"),
+                    call("delete_document", {"path": "hello.txt"}, "delete"),
+                    AIMessage(content="操作结束"),
+                ])
+                app = AgentApplication(build_agent(model, tools))
+                first = await app.run_task("摄取文档后删除索引")
+                self.assertEqual(first.status.value, "waiting_approval", first.error)
+                pending = await app.pending_approvals(first.session_id)
+                self.assertEqual(next(iter(pending.values())).name, "ingest_document")
+                second = await app.resume_task(first.session_id, {key: "approve" for key in pending})
+                self.assertEqual(second.status.value, "waiting_approval", second.error)
+                pending = await app.pending_approvals(first.session_id)
+                self.assertEqual(next(iter(pending.values())).name, "delete_document")
+                third = await app.resume_task(first.session_id, {key: "reject" for key in pending})
+                self.assertEqual(third.status.value, "completed", third.error)
+                status = await self.connect_and_call("rag_status", {})
+                self.assertGreaterEqual(json.loads(status.structured_content["content"])["documents"], 1)
+        asyncio.run(execute())

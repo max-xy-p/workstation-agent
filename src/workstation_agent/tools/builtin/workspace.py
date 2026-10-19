@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 
 from ...safety.permissions import PermissionLevel
 from ..contracts import PydanticTool, ToolArguments, ToolError
+from ..execution import check_execution
 
 
 class WorkspacePathArguments(ToolArguments):
@@ -68,6 +69,7 @@ class ListFilesTool(PydanticTool[ListFilesArguments]):
             raise ToolError("requested directory does not exist", code="not_found")
         entries = []
         for item in path.iterdir():
+            check_execution()
             if item.is_symlink() or item.is_junction():
                 kind = "link"
             else:
@@ -108,10 +110,12 @@ class ReadTextFileTool(PydanticTool[ReadTextFileArguments]):
             with path.open("r", encoding="utf-8") as stream:
                 remaining = arguments.offset
                 while remaining:
+                    check_execution()
                     skipped = stream.read(min(remaining, 8192))
                     if not skipped:
                         break
                     remaining -= len(skipped)
+                check_execution()
                 content = stream.read(limit + 1)
         except UnicodeDecodeError:
             raise ToolError("file is not valid UTF-8 text", code="invalid_utf8") from None

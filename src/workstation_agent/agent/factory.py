@@ -13,6 +13,7 @@ from langchain.agents.middleware.types import InputAgentState, OutputAgentState
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..context.budget import resolve_settings
@@ -22,6 +23,7 @@ from ..tools.task_status import task_status_tool
 from .context import ContextMiddleware
 from .prompts import SYSTEM_PROMPT
 from .rag_guard import RagSearchGuard
+from .run_boundary import RunBoundary
 
 
 def build_agent(
@@ -44,14 +46,18 @@ def build_agent(
     context_middleware = ContextMiddleware(model, tools, settings, summary_model)
     # 官方工厂把多种中间件状态合并为运行时 schema；只有此组装边界使用 Any 描述合并状态。
     middleware: list[AgentMiddleware[Any, ContextRuntime]] = [
+        RunBoundary(),
         ModelCallLimitMiddleware[Any, ContextRuntime](
-            run_limit=max_model_calls, exit_behavior="error"
+            run_limit=max_model_calls, thread_limit=max_model_calls, exit_behavior="error"
         ),
         ToolCallLimitMiddleware[Any, ContextRuntime](
-            run_limit=max_tool_calls, exit_behavior="error"
+            run_limit=max_tool_calls, thread_limit=max_tool_calls, exit_behavior="error"
         ),
         ToolCallLimitMiddleware[Any, ContextRuntime](
-            tool_name="search_documents", run_limit=max_search_calls, exit_behavior="error"
+            tool_name="search_documents",
+            run_limit=max_search_calls,
+            thread_limit=max_search_calls,
+            exit_behavior="error",
         ),
         RagSearchGuard(),
         context_middleware,
@@ -61,7 +67,7 @@ def build_agent(
         model=model,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
-        checkpointer=checkpointer,
+        checkpointer=checkpointer if checkpointer is not None else InMemorySaver(),
         state_schema=ContextAgentState,
         context_schema=ContextRuntime,
         middleware=middleware,

@@ -70,8 +70,7 @@ uv run workstation-agent session clear project-chat --approve-delete
 使用官方 SqliteSaver，业务 RunRepository 不承担恢复能力。运行与清除通过本机文件锁互斥，
 同一会话跨进程忙碌时拒绝操作；锁文件只有占位字节，不含消息正文。
 无论是否保存会话，都执行统一请求预算与官方裁剪。仅当 CONTEXT_SUMMARIZE=true
-且 MEMORY_ALLOW_REMOTE=true 时尝试官方摘要；每次运行最多一次。详见 [上下文管理](context.md)。会话恢复不等于工具审批恢复；
-失败或等待审批后不承诺继续原执行点，应清除会话或开启新会话重试。
+且 MEMORY_ALLOW_REMOTE=true 时尝试官方摘要；每次运行最多一次。详见 [上下文管理](context.md)。工具审批通过官方检查点恢复，命令和限制见 [运行控制](run-control.md)。失败的普通运行不能用旧审批重新启动。
 
 持久化时保留消息协议和调用 ID，原始工具正文/artifact 替换为占位符，已知 API Key、
 服务令牌及常见凭据模式被脱敏。工具内容需要时重新读取。会话消息、模型答复和摘要仍可能含业务信息；
@@ -102,7 +101,7 @@ uv run workstation-agent run "我长期偏好使用中文交流" --transport loc
 自动写入权限只授予内部提交工具，不扩大 Agent 可见写入权限。
 
 Run 的 memory_extraction 步骤单独返回 saved/pending 或安全错误码。
-失败不改变主任务 completed 状态，运行后处理可能增加响应延迟；
+普通提取失败不会撤销主任务答复，但整次任务超时会返回 limit_reached；提取计入运行时间限制，可能增加响应延迟；
 已经进入线程的模型调用不能保证立即响应协程取消。
 
 ## 遗忘与保留边界

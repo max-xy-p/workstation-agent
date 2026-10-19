@@ -70,7 +70,7 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         """只有用户入口能初始化或补充目标与约束；旧检查点没有状态栏时自动初始化。"""
         context = runtime.context or ContextRuntime()
         board = initialize(state["messages"], state.get("task_board"), context)
-        return {"task_board": board}
+        return {"task_board": board, "summary_calls": 0}
 
     async def abefore_agent(
         self, state: ContextAgentState, runtime: Runtime[ContextRuntime]
@@ -81,6 +81,7 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         self, state: ContextAgentState, runtime: Runtime[ContextRuntime]
     ) -> ContextRuntime:
         context = runtime.context or ContextRuntime()
+        context.summary_calls = max(context.summary_calls, state.get("summary_calls", 0))
         board = state.get("task_board")
         if board is not None:
             context.board = collect_results(
@@ -203,7 +204,10 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         self, state: ContextAgentState, context: ContextRuntime, changes: dict[str, Any] | None
     ) -> dict[str, Any]:
         """只接受官方组件的消息更新；当前用户消息及后续工具结果保留原文。"""
-        update: dict[str, Any] = {"task_board": context.board}
+        update: dict[str, Any] = {
+            "task_board": context.board,
+            "summary_calls": context.summary_calls,
+        }
         if changes and "messages" in changes:
             summary = [
                 m

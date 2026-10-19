@@ -39,6 +39,7 @@ uv run workstation-agent run "检查项目结构" --transport local `
 | TRIGGER_RATIO | 0.8 | 输入预算达到此比例时开始清理或摘要 |
 | SUMMARIZE | false | 是否尝试额外摘要；还需 `MEMORY_ALLOW_REMOTE=true` 授权出站 |
 | REFRESH_LIMIT | 2 | 单次任务首次召回之外允许的记忆刷新次数 |
+| BOARD_TOKENS | 1024 | 状态栏可选内容的输入上限，实际最多使用输入预算的四分之一 |
 
 可用输入为 `min(输入上限, 窗口 - 输出预留) - 安全余量`。
 计量包括系统规则、历史、当前要求、工具参数与结果、任务状态栏、记忆、RAG，
@@ -57,18 +58,34 @@ uv run workstation-agent run "检查项目结构" --transport local `
 | --- | --- |
 | goal / current_request | 初始用户目标与本轮要求；用户入口更新，模型工具不能修改 |
 | criteria / constraints | 用户显式提供的验收条件与约束；续聊时追加 |
-| items | 任务项及 pending、in_progress、completed、blocked 状态 |
+| items | 任务项及 pending、in_progress、pending_confirmation、completed、blocked 状态 |
 | facts | 简短事实或判断，以及来源 ID、是否已确认 |
 | results | 成功工具调用的 ID、工具名和允许保留的位置、版本字段 |
 | blockers / next_action | 当前阻塞和下一步；工具失败也会写入安全的阻塞说明 |
-| task_id / session_id / updated_at | 任务身份、会话身份和 UTC 更新时间 |
+| task_id / session_id / updated_at / revision | 任务身份、会话身份、UTC 更新时间和用户验收使用的状态版本 |
 
 模型通过 `update_task_status` 工具更新进度字段，同一轮只允许调用一次，避免并行覆盖。该工具声明参数 schema 和写权限，
 经过 ToolExecutor，只允许修改当前运行内的状态，不获得任何文件写入或长期记忆写入权限。
-标记完成必须引用已成功执行的工具调用，或明确说“确认完成”“已完成”“确认已完成”的用户消息。
-确认事实必须逐字出现在当前可读来源中；其他判断使用 `confirmed=false`。
-这是来源检查，不能证明工具结果在语义上足以满足某个验收条件，仍需调用方审核。
+模型报告完成时必须提供成功结果引用，但工具成功本身不能证明某个任务项通过验收。
+例如列目录成功，并不能证明“测试通过”。系统将完成报告保存为 `pending_confirmation`，
+只有用户入口核对任务 ID、状态版本和任务项 ID 后才能改为 `completed`：
+
+```powershell
+# chat 是保存的会话；task-id、7 和 test 都需替换为 task_status 中实际的值。
+uv run workstation-agent confirm-status chat --transport local --task-id task-id --revision 7 --item test
+```
+
+旧任务、旧状态版本或非待确认项目不能验收；模型工具没有这个权限。
+对话中一句“已完成”也不会自动变成其他项目的验收凭据。
+确认事实仍要求逐字出现在可读来源中，表示来源包含这段文字，不表示程序证明了现实中的真实性。
+只提交 `next_action` 会保留已有任务项、事实和阻塞；显式提交空列表才清空相应字段。
 模型结束回答只代表本次 Run 已返回答复，不会自动把所有任务项标记为完成。
+
+完整状态和模型输入分开保存。每次请求保留目标、约束和验收条件，
+再按预算选择阻塞、下一步、未完成项目和近期事实；已完成项目优先级最低。
+不重复发送当前用户原文，也不发送全部来源位置、时间和身份字段。
+选择按完整条目进行，省略的内容仍保留在状态栏中；用量原因记录 `projected_task_board`。
+必要的目标与限制超过预算时仍停止，不会为满足状态栏上限而静默截断。
 
 状态栏有条目数量和文本长度限制。目标、约束和当前要求不会为腾出预算而静默截断；
 它们本身过大时明确停止。工具正文不复制到 results，所需原文继续通过授权工具读取。
@@ -111,10 +128,11 @@ RAG 引用保留文档位置和 checksum；重新检索时核对版本，不把�
 ## 保存和旧数据
 
 未启用会话时，状态栏仅存在于本次运行，CLI 返回后不会自动写盘。
-异常停止时，回调提供停止原因；检查点保留最后成功节点的状态，不提供审批恢复。
+异常停止时，回调提供停止原因；检查点保留最后成功节点的状态，审批恢复、超时和取消见 [运行控制](run-control.md)。
 启用会话时，状态栏是官方检查点的 JSON channel，不创建新的业务表，SQLite 表仍由官方维护。
-`schema_version=1` 标识状态栏格式；`restore_board` 是其版本迁移入口：
-旧检查点缺少状态栏时初始化新状态，已知版本校验后读取，未知版本拒绝加载。
+`schema_version=2` 标识状态栏格式；`restore_board` 是其版本迁移入口：
+旧检查点缺少状态栏时初始化新状态；格式 1 会升级为格式 2，旧的完成项目改为待确认，
+避免把旧版仅校验成功引用的结果当成用户验收。未知版本拒绝加载。
 使用 `--new-task` 可明确放弃旧状态栏并建立新状态；后续增加版本须在此入口添加显式迁移。
 这次没有修改 SQLite 表结构，因此不新增 SQL migration，也不需要重建记忆或 RAG 索引。
 

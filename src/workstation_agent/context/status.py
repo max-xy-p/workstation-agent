@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
@@ -19,7 +20,8 @@ def initialize(
     task = runtime.task or (user.text if user else "")
     if board is None:
         board = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "revision": 0,
             "task_id": runtime.run_id or (user.id if user else "") or "task",
             "session_id": runtime.session_id,
             "updated_at": utc_now(),
@@ -34,6 +36,7 @@ def initialize(
             "next_action": "分析当前要求",
         }
     board = deepcopy(board)
+    board["revision"] = board.get("revision", 0) + 1
     board["current_request"] = task
     board["criteria"] = list(dict.fromkeys([*board["criteria"], *runtime.criteria]))
     board["constraints"] = list(dict.fromkeys([*board["constraints"], *runtime.constraints]))
@@ -71,7 +74,7 @@ def collect_results(
         if call is None or "[工具结果未持久化" in message.text:
             continue
         location = ""
-        version = ""
+        version = sha256(message.text.encode()).hexdigest()
         evidence = rag_evidence(message)
         if evidence:
             location = "; ".join(item["citation"] for item in evidence)[:1000]
@@ -82,12 +85,23 @@ def collect_results(
                 location = path[:500]
                 offset = call["args"].get("offset", 0)
                 location += f"@offset={offset}"
-        refs[message.tool_call_id] = {
+        reference: ResultReference = {
             "id": message.tool_call_id,
             "tool": message.name or "tool",
             "location": location,
             "version": version,
         }
+        previous = refs.get(message.tool_call_id)
+        if previous is not None and previous != reference:
+            # 调用 ID 被复用但来源已变化时，旧事实和验收结果不能沿用。
+            board["facts"] = [
+                fact for fact in board["facts"] if fact["source"] != message.tool_call_id
+            ]
+            for item in board["items"]:
+                if message.tool_call_id in item["evidence"] and item["status"] == "completed":
+                    item["status"] = "pending_confirmation"
+            board["revision"] += 1
+        refs[message.tool_call_id] = reference
     # 已有任务项引用的凭据不会因新增结果被删除，其余保留最近 32 项。
     used = {source for item in board["items"] for source in item["evidence"]}
     values = list(refs.values())
@@ -110,3 +124,25 @@ def invalidate_memory_sources(board: TaskBoard, invalid: set[str]) -> TaskBoard:
             item["status"] = "blocked"
             board["blockers"] = [*board["blockers"], "任务项的记忆来源已变化，需要重新核对"][-8:]
     return board
+
+
+def confirm_items(
+    board: TaskBoard, *, task_id: str, revision: int, item_ids: tuple[str, ...]
+) -> TaskBoard:
+    """由用户入口验收指定版本的任务项；模型工具不能调用此函数。"""
+    if board["task_id"] != task_id or board.get("revision", 0) != revision:
+        raise ValueError("任务状态已变化，请重新查看后确认")
+    if not item_ids or len(set(item_ids)) != len(item_ids):
+        raise ValueError("请选择不重复的待确认任务项")
+    selected = [item for item in board["items"] if item["id"] in item_ids]
+    if len(selected) != len(item_ids) or any(
+        item["status"] != "pending_confirmation" for item in selected
+    ):
+        raise ValueError("只能确认当前任务中等待验收的项目")
+    result = deepcopy(board)
+    for item in result["items"]:
+        if item["id"] in item_ids:
+            item["status"] = "completed"
+    result["revision"] = revision + 1
+    result["updated_at"] = utc_now()
+    return result

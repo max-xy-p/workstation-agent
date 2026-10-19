@@ -26,11 +26,11 @@ from .registry import ToolRegistry
 
 
 class StatusItem(ToolArguments):
-    """约束任务项大小；完成项需要成功结果的调用 ID 或用户消息 ID。"""
+    """约束任务项大小；模型报告完成后仍须由用户验收。"""
 
     id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=200)
-    status: Literal["pending", "in_progress", "completed", "blocked"]
+    status: Literal["pending", "in_progress", "pending_confirmation", "completed", "blocked"]
     evidence: list[str] = Field(default_factory=list, max_length=8)
 
 
@@ -61,23 +61,27 @@ class RunStatePolicy(AllowSafeReadsPolicy):
 
 
 class UpdateTaskStatusTool(PydanticTool[UpdateStatusArguments]):
-    """校验结果凭据后更新运行内状态；是否写检查点由已有会话授权决定。"""
+    """校验引用后更新进度；成功结果不等于任务已通过验收。"""
 
     name = "update_task_status"
     description = (
-        "更新进度、事实、阻塞和下一步。完成项必须引用成功工具调用 ID；目标和约束不可修改。"
+        "更新进度、事实、阻塞和下一步。报告完成时引用结果 ID；"
+        "系统标为待用户确认，不能自行验收。省略的字段保持不变。"
     )
     permission = PermissionLevel.CONTROLLED_WRITE
     arguments_model = UpdateStatusArguments
 
-    def __init__(self, board: TaskBoard, sources: dict[str, str], confirmations: set[str]) -> None:
+    def __init__(self, board: TaskBoard, sources: dict[str, str]) -> None:
         self.board = deepcopy(board)
         self.sources = sources
-        self.confirmations = confirmations
+
+    def validate_arguments(self, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        """保留实际提交的字段，避免参数默认值清空原有状态。"""
+        return self._parse(arguments).model_dump(exclude_unset=True)
 
     def run(self, arguments: UpdateStatusArguments) -> str:
         """拒绝无凭据的完成项和无原文支持的已确认事实，不信任模型自述。"""
-        valid = {ref["id"] for ref in self.board["results"]} | self.confirmations
+        valid = {ref["id"] for ref in self.board["results"]}
         if len({item.id for item in arguments.items}) != len(arguments.items):
             raise ToolError("任务项 ID 重复", code="invalid_status")
         items: list[TaskItem] = []
@@ -86,8 +90,19 @@ class UpdateTaskStatusTool(PydanticTool[UpdateStatusArguments]):
                 raise ToolError("任务项引用不存在或失败的结果", code="invalid_status")
             if item.status == "completed" and not item.evidence:
                 raise ToolError("标记完成需要结果凭据", code="invalid_status")
+            previous = next((old for old in self.board["items"] if old["id"] == item.id), None)
+            status = item.status
+            if status == "completed":
+                status = "pending_confirmation"
+                # 用户已确认且内容、来源均未变化的项目可以保留确认结果。
+                if (
+                    previous
+                    and previous["status"] == "completed"
+                    and (previous["text"] == item.text and previous["evidence"] == item.evidence)
+                ):
+                    status = "completed"
             items.append(
-                {"id": item.id, "text": item.text, "status": item.status, "evidence": item.evidence}
+                {"id": item.id, "text": item.text, "status": status, "evidence": item.evidence}
             )
         facts: list[TaskFact] = []
         for fact in arguments.facts:
@@ -98,13 +113,17 @@ class UpdateTaskStatusTool(PydanticTool[UpdateStatusArguments]):
             facts.append({"text": fact.text, "source": fact.source, "confirmed": fact.confirmed})
         if any(len(text) > 300 for text in arguments.blockers):
             raise ToolError("阻塞说明过长", code="invalid_status")
-        self.board.update(
-            items=items,
-            facts=facts,
-            blockers=arguments.blockers,
-            next_action=arguments.next_action,
-            updated_at=utc_now(),
-        )
+        supplied = arguments.model_fields_set
+        if "items" in supplied:
+            self.board["items"] = items
+        if "facts" in supplied:
+            self.board["facts"] = facts
+        if "blockers" in supplied:
+            self.board["blockers"] = arguments.blockers
+        if "next_action" in supplied:
+            self.board["next_action"] = arguments.next_action
+        self.board["revision"] = self.board.get("revision", 0) + 1
+        self.board["updated_at"] = utc_now()
         return "任务状态已更新"
 
 
@@ -145,14 +164,7 @@ def task_status_tool() -> BaseTool:
             for m in runtime.state["messages"]
             if m.id and isinstance(m, HumanMessage | ToolMessage)
         }
-        confirmations = {
-            m.id
-            for m in runtime.state["messages"]
-            if isinstance(m, HumanMessage)
-            and m.id
-            and m.text.strip() in {"确认完成", "已完成", "确认已完成"}
-        }
-        operation = UpdateTaskStatusTool(board, sources, confirmations)
+        operation = UpdateTaskStatusTool(board, sources)
         result = ToolExecutor(ToolRegistry((operation,)), RunStatePolicy()).execute(
             "update_task_status",
             dict(arguments),

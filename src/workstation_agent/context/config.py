@@ -23,12 +23,18 @@ class ContextSettings:
     trigger_ratio: float = 0.8
     summarize: bool = False
     refresh_limit: int = 2
+    board_tokens: int = 1024
 
     def __post_init__(self) -> None:
         for value in (self.window, self.input_limit, self.output_limit):
             if value is not None and (type(value) is not int or value < 1):
                 raise ContextConfigurationError("模型容量必须为正整数")
-        for value in (self.output_tokens, self.safety_tokens, self.refresh_limit):
+        for value in (
+            self.output_tokens,
+            self.safety_tokens,
+            self.refresh_limit,
+            self.board_tokens,
+        ):
             if type(value) is not int or value < 0:
                 raise ContextConfigurationError("上下文预算必须为非负整数")
         if not self.output_tokens or not math.isfinite(self.trigger_ratio):
@@ -72,4 +78,5 @@ class ContextSettings:
             trigger_ratio=float(os.getenv(prefix + "TRIGGER_RATIO", "0.8")),
             summarize=raw_summary == "true",
             refresh_limit=int(os.getenv(prefix + "REFRESH_LIMIT", "2")),
+            board_tokens=int(os.getenv(prefix + "BOARD_TOKENS", "1024")),
         )

@@ -40,10 +40,10 @@ ToolMessage 保留 `tool_call_id`，框架据此把结果交回模型。
 
 - 正常最终消息：`completed`。
 - 参数、文件和路径等工具错误：错误 ToolMessage，允许模型解释或修正；任务仍可能正常完成。
-- 工作站返回需要审批：停止当前任务，`waiting_approval`；本阶段未交付审批恢复。
+- 工作站返回需要审批：通过官方中断暂停，返回 `waiting_approval`；可逐项决定后恢复，见 [运行控制](run-control.md)。
 - 官方模型、工具或 RAG 检索次数限制，以及相同参数的重复检索：`limit_reached`。
 - 网络、模型或其他运行异常：安全的 `failed` 说明，不回显原始异常。
-- 协程取消：标记 `cancelled` 后继续传递取消信号；已经开始的工具线程未必立即停止。
+- 协程取消：标记 `cancelled` 后继续传递取消信号；工具收到停止信号，等待线程退出后释放会话锁。
 - 空任务：调用前拒绝，不创建 Run。
 
 `--trace` 输出官方图节点名称，包括模型、工具和中间件节点，不输出参数、Prompt 或工具内容。
@@ -55,16 +55,17 @@ Step 不保存工具原始参数或输出，避免默认审计泄漏内容。最
 - `WORKSTATION_AGENT_MAX_STEPS`：单次模型调用上限，默认 8。
 - `WORKSTATION_AGENT_MAX_TOOL_CALLS`：单次工具调用上限，默认 32。
 - `WORKSTATION_AGENT_MODEL_TIMEOUT`：模型请求与 MCP 读取超时，默认 30 秒。
+- `WORKSTATION_AGENT_RUN_TIMEOUT`：整次运行上限，默认 300 秒，含审批等待和记忆提取。
 - 底层图递归限制为中间件留出执行余量；业务调用次数仍由官方中间件限制。
 - 模型客户端重试次数为 0，图不自动重试工具副作用。
 
-默认每次任务独立；--session 或 SESSIONS_ENABLED 可启用官方 SQLite Checkpointer 跨任务续聊，不能恢复工具审批。
+默认每次任务独立；--session 或 SESSIONS_ENABLED 可启用官方 SQLite Checkpointer 跨任务续聊，支持工具审批恢复。
 可通过 `AgentApplication(repository=...)` 显式保存业务 Run；默认入口不保存任务、消息或答复。
 SQLite RunRepository 的 round-trip 和显式保存测试保留，但它不是 LangGraph Checkpointer。
 Memory 已通过受控查询门面装配到 ContextBuilder，动态内容按次注入模型请求，不持久化到会话历史。
 RAG 已通过默认 search_documents 工具接入，证据使用 Context 模块统一格式。
 先通过 CLI 摄取文档，再由单 Agent 按证据决定后续查询，详见 [RAG 文档](rag.md)。
-显式记忆写入/删除、会话清除和默认关闭的自动提取见 [记忆使用与验收](memory.md)。用户界面与审批恢复仍待交付。
+显式记忆写入/删除、会话清除和默认关闭的自动提取见 [记忆使用与验收](memory.md)。用户界面仍待交付。
 
 ## 验收依据
 

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from importlib.metadata import version
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from pydantic import __version__ as pydantic_version
 
 from . import __version__
@@ -18,6 +18,7 @@ from .bootstrap import build_infrastructure, build_tool_application
 from .config import Settings
 from .context.config import ContextConfigurationError
 from .context.state import TaskBoard
+from .domain.runs import Run
 from .tools import ToolResult
 
 _RESULT_ADAPTER = TypeAdapter(ToolResult)
@@ -49,6 +50,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--approve-memory-delete", action="store_true")
     run.add_argument("--transport", choices=("mcp", "local"), default="mcp")
     run.add_argument("--trace", action="store_true", help="print official graph node names")
+    approvals = subparsers.add_parser("approvals", help="show pending tool approvals")
+    approvals.add_argument("session")
+    resume = subparsers.add_parser("resume", help="resume the saved tool approvals")
+    resume.add_argument("session")
+    resume.add_argument(
+        "--decision",
+        action="append",
+        required=True,
+        help="interrupt ID=approve or interrupt ID=reject; repeat for each item",
+    )
+    confirm = subparsers.add_parser("confirm-status", help="confirm reviewed task items")
+    confirm.add_argument("session")
+    confirm.add_argument("--task-id", required=True)
+    confirm.add_argument("--revision", required=True, type=int)
+    confirm.add_argument("--item", action="append", required=True)
+    for command in (approvals, resume, confirm):
+        command.add_argument("--transport", choices=("mcp", "local"), default="mcp")
     subparsers.add_parser("serve", help="start the local MCP workstation service")
     tools = subparsers.add_parser("tools", help="list tools and their argument schemas")
     tools.add_argument("--json", action="store_true", help="print schemas and permissions as JSON")
@@ -153,6 +171,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"model base URL: {settings.model_base_url}")
         print(f"model API key: {'configured' if settings.api_key else '(not configured)'}")
         print(f"model timeout: {settings.model_timeout}")
+        print(f"run timeout (including approval wait): {settings.run_timeout}")
+        print(f"Context task board token cap: {settings.context.board_tokens}")
         print(f"max tool calls: {settings.max_tool_calls}")
         print(f"RAG mode: {'hybrid' if settings.rag.embedding_model else 'bm25'}")
         print(f"RAG contextual model: {settings.rag.context_model or '(structural prefix only)'}")
@@ -335,6 +355,64 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 3 if not args.approve_delete else 1
 
+    if args.command in {"approvals", "resume", "confirm-status"}:
+        from typing import Literal
+
+        from .bootstrap import build_agent_application
+
+        async def control_session() -> dict[str, JsonValue]:
+            async with build_agent_application(
+                settings, transport=args.transport, persist_session=True
+            ) as application:
+                if args.command == "approvals":
+                    pending = await application.pending_approvals(args.session)
+                    return {
+                        "approvals": {key: value.model_dump() for key, value in pending.items()}
+                    }
+                if args.command == "confirm-status":
+                    board = await application.confirm_status(
+                        args.session,
+                        task_id=args.task_id,
+                        revision=args.revision,
+                        item_ids=tuple(args.item),
+                    )
+                    return {"task_status": TypeAdapter(JsonValue).validate_python(board)}
+                decisions: dict[str, Literal["approve", "reject"]] = {}
+                for raw in args.decision:
+                    key, separator, action = raw.partition("=")
+                    if not separator or not key or key in decisions:
+                        raise ValueError("审批 ID 无效或重复")
+                    if action not in {"approve", "reject"}:
+                        raise ValueError("审批决定必须为 approve 或 reject")
+                    decisions[key] = "approve" if action == "approve" else "reject"
+                snapshots: list[TaskBoard] = []
+                result: Run = await application.resume_task(
+                    args.session, decisions, on_status=snapshots.append
+                )
+                pending = await application.pending_approvals(args.session)
+                return {
+                    **asdict(result),
+                    "task_status": TypeAdapter(JsonValue).validate_python(snapshots[-1])
+                    if snapshots
+                    else None,
+                    "approvals": {key: value.model_dump() for key, value in pending.items()},
+                }
+
+        try:
+            payload = asyncio.run(control_session())
+            print(json.dumps(payload, ensure_ascii=False, default=str))
+            return (
+                3
+                if payload.get("status") == "waiting_approval"
+                else (1 if payload.get("status") in {"failed", "cancelled", "limit_reached"} else 0)
+            )
+        except (ValueError, KeyError):
+            print("会话操作无效：请检查会话 ID、当前审批列表或状态版本", file=sys.stderr)
+            return 2
+        except Exception:
+            print("会话操作失败：请检查模型、会话与工具服务配置", file=sys.stderr)
+            return 1
+
     if args.command == "run":
         if (
             not args.task.strip()
@@ -355,7 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             nonlocal status
             status = value
 
-        async def execute():
+        async def execute() -> tuple[Run, dict[str, dict[str, JsonValue]]]:
             async with build_agent_application(
                 settings,
                 transport=args.transport,
@@ -368,7 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.trace
                     else None
                 )
-                return await application.run_task(
+                result = await application.run_task(
                     args.task,
                     session_id=args.session,
                     on_node=trace,
@@ -377,9 +455,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     criteria=tuple(args.criterion),
                     new_task=args.new_task,
                 )
+                pending = await application.pending_approvals(result.session_id)
+                return result, {key: value.model_dump() for key, value in pending.items()}
 
         try:
-            result = asyncio.run(execute())
+            result, pending = asyncio.run(execute())
         except ContextConfigurationError as exc:
             print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
             return 2
@@ -392,7 +472,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
         print(
-            json.dumps({**asdict(result), "task_status": status}, ensure_ascii=False, default=str)
+            json.dumps(
+                {**asdict(result), "task_status": status, "approvals": pending},
+                ensure_ascii=False,
+                default=str,
+            )
         )
         return (
             0

@@ -9,6 +9,7 @@ from pydantic.dataclasses import dataclass
 
 from ..safety.permissions import ApprovalPolicy, PermissionRequired
 from .contracts import ToolError, ValidatedTool
+from .execution import GRANT, ToolGrant, check_execution
 from .registry import ToolRegistry
 
 
@@ -67,15 +68,20 @@ class ToolExecutor:
     def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         """执行工具并返回结果；权限不足时停止并要求审批。"""
         try:
+            check_execution()
             tool = self.registry.get(name)
             if not isinstance(arguments, dict) or any(
                 not isinstance(key, str) for key in arguments
             ):
                 raise ToolError("arguments must be a JSON object", code="invalid_arguments")
+            requested = ToolGrant.for_call(name, arguments)
             if isinstance(tool, ValidatedTool):
                 arguments = tool.validate_arguments(arguments)
-            if not self.approval_policy.allows(name, tool.permission, arguments):
+            if GRANT.get() != requested and not self.approval_policy.allows(
+                name, tool.permission, arguments
+            ):
                 raise PermissionRequired(f"approval required for tool: {name}")
+            check_execution()
             content = tool.invoke(arguments)
             if not isinstance(content, str):
                 return self._failure(name, "invalid_output", "tool must return text")

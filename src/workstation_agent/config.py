@@ -35,6 +35,8 @@ class Settings:
     model_base_url: str = "https://api.openai.com/v1"
     # 模型请求和 MCP 读取的超时秒数。
     model_timeout: float = 30.0
+    # 整次运行的截止秒数，包含审批等待，恢复不能重新计时。
+    run_timeout: float = 300.0
     # 单次任务的工具调用次数上限。
     max_tool_calls: int = 32
     # 本机 MCP 工具服务的监听端口。
@@ -100,6 +102,8 @@ class Settings:
             raise ValueError("模型 base_url 必须为不含凭据、查询和片段的 HTTP 地址")
         if not math.isfinite(self.model_timeout) or self.model_timeout <= 0:
             raise ValueError("模型超时必须为正数")
+        if not math.isfinite(self.run_timeout) or self.run_timeout <= 0:
+            raise ValueError("整次任务超时必须为正数")
         if type(self.max_tool_calls) is not int or self.max_tool_calls < 1:
             raise ValueError("工具调用上限必须为正整数")
         if type(self.service_port) is not int or not 1 <= self.service_port <= 65535:
@@ -146,6 +150,7 @@ class Settings:
             raise ValueError("WORKSTATION_AGENT_SERVICE_PORT must be an integer") from exc
         try:
             model_timeout = float(os.getenv("WORKSTATION_AGENT_MODEL_TIMEOUT", "30"))
+            run_timeout = float(os.getenv("WORKSTATION_AGENT_RUN_TIMEOUT", "300"))
             max_tool_calls = int(os.getenv("WORKSTATION_AGENT_MAX_TOOL_CALLS", "32"))
         except ValueError:
             raise ValueError("模型超时或工具调用上限配置无效") from None
@@ -158,6 +163,7 @@ class Settings:
             api_key=os.getenv("WORKSTATION_AGENT_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
             model_base_url=os.getenv("WORKSTATION_AGENT_BASE_URL", "https://api.openai.com/v1"),
             model_timeout=model_timeout,
+            run_timeout=run_timeout,
             max_tool_calls=max_tool_calls,
             service_port=service_port,
             service_token=os.getenv("WORKSTATION_AGENT_SERVICE_TOKEN") or None,
