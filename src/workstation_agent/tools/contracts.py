@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -14,6 +14,7 @@ from ..safety.permissions import PermissionLevel
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     """描述工具名称、用途和参数格式。"""
+
     # 工具的唯一名称。
     name: str
     # 供使用者和模型查看的用途说明。
@@ -32,10 +33,12 @@ class ToolError(RuntimeError):
 
 class Tool(Protocol):
     """约定工具需要提供的说明、权限和调用方法。"""
+
     @property
     def definition(self) -> ToolDefinition:
         """只读工具说明；既允许实现为属性，也允许实现为实例字段。"""
         ...
+
     # 执行工具需要的权限等级。
     permission: PermissionLevel
 
@@ -44,6 +47,7 @@ class Tool(Protocol):
 
 class ToolRequest(BaseModel):
     """保存一次调用的工具名称和参数。"""
+
     # 严格检查类型并拒绝多余字段。
     model_config = ConfigDict(strict=True, extra="forbid")
     # 本次要调用的工具名称。
@@ -54,6 +58,7 @@ class ToolRequest(BaseModel):
 
 class ToolArguments(BaseModel):
     """提供工具参数的公共校验配置。"""
+
     # 严格类型、禁止多余参数，校验后不可重新赋值字段。
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
@@ -65,11 +70,9 @@ class ValidatedTool(Protocol):
     def validate_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]: ...
 
 
-ArgumentsT = TypeVar("ArgumentsT", bound=ToolArguments)
-
-
-class PydanticTool(Generic[ArgumentsT],ABC):
+class PydanticTool[ArgumentsT: ToolArguments](ABC):
     """提供参数校验和参数说明生成，子类实现具体操作。"""
+
     # 工具的唯一名称。
     name: str
     # 工具用途说明。

@@ -131,5 +131,6 @@ class MemoryIntegrationTests(unittest.TestCase):
         self.assertEqual(result.error_code, "sensitive_content")
         self.assertNotIn("private123", result.content)
         self.assertFalse(self.settings.memory_database_path.exists())
+        outside_settings = replace(self.settings, data_dir=self.root.parent)
         with self.assertRaises(ValueError):
-            build_memory_application(replace(self.settings, data_dir=self.root.parent))
+            build_memory_application(outside_settings)

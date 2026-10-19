@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from pydantic import JsonValue
 
@@ -261,6 +262,35 @@ def build_tool_application(
     return ToolApplication(executor)
 
 
+def _memory_processors(
+    settings: Settings,
+    model: BaseChatModel,
+    policy: MemoryApprovalPolicy,
+    retrieval: RetrievalStrategy[MemoryRecord] | None,
+) -> tuple[ToolApplication | None, BaseChatModel | None]:
+    """按已授权配置组装独立的提取与摘要入口，不在构造时调用模型。"""
+    if not (settings.memory.auto_extract or settings.context.summarize):
+        return None, None
+    from .models.providers.memory import AuthorizedMemoryModel, LangMemExtractor
+    from .tools.extraction import MemoryExtractionTool
+
+    summary_model: BaseChatModel | None = None
+    if settings.context.summarize and settings.memory.allow_remote:
+        summary_model = AuthorizedMemoryModel(delegate=model, policy=policy, max_calls=1)
+    if not settings.memory.auto_extract:
+        return None, summary_model
+    extractor = LangMemExtractor(model, policy, max_calls=settings.memory.extract_calls)
+    operation = MemoryExtractionTool(
+        _memory_service(settings, retrieval),
+        settings.memory_access,
+        extractor,
+        settings.memory,
+        policy,
+    )
+    extraction = ToolApplication(ToolExecutor(ToolRegistry((operation,)), policy))
+    return extraction, summary_model
+
+
 @asynccontextmanager
 async def build_agent_application(
     settings: Settings,
@@ -310,32 +340,7 @@ async def build_agent_application(
             settings.memory_access,
             policy,
         )
-    extraction, summary_model = None, None
-    if settings.memory.auto_extract or settings.context.summarize:
-        from .models.providers.memory import AuthorizedMemoryModel, LangMemExtractor
-
-        if settings.context.summarize and settings.memory.allow_remote:
-            summary_model = AuthorizedMemoryModel(delegate=model, policy=policy, max_calls=1)
-        if settings.memory.auto_extract:
-            from .tools.extraction import MemoryExtractionTool
-
-            extractor = LangMemExtractor(model, policy, max_calls=settings.memory.extract_calls)
-            extraction = ToolApplication(
-                ToolExecutor(
-                    ToolRegistry(
-                        (
-                            MemoryExtractionTool(
-                                _memory_service(settings, memory_retrieval),
-                                settings.memory_access,
-                                extractor,
-                                settings.memory,
-                                policy,
-                            ),
-                        )
-                    ),
-                    policy,
-                )
-            )
+    extraction, summary_model = _memory_processors(settings, model, policy, memory_retrieval)
 
     def application(tools: Sequence[BaseTool]) -> AgentApplication:
         # 本机记忆目录取代远端同名能力，身份不由远端服务或模型参数决定。

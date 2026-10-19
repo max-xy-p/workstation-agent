@@ -6,7 +6,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from workstation_agent.application import ToolApplication
 from workstation_agent.safety import PermissionLevel, PermissionRequired
-from workstation_agent.tools import PydanticTool, ToolArguments, ToolExecutor, ToolRegistry, ToolResult
+from workstation_agent.tools import (
+    PydanticTool,
+    ToolArguments,
+    ToolExecutor,
+    ToolRegistry,
+    ToolResult,
+)
 
 
 class EchoArguments(ToolArguments):
@@ -108,13 +114,15 @@ class ToolExecutorTests(unittest.TestCase):
         self.assertEqual(TypeAdapter(ToolResult).validate_json(payload).content, "default")
 
     def test_duplicate_names_are_rejected(self) -> None:
+        duplicate_tools = (EchoTool(), EchoTool())
         with self.assertRaises(ValueError):
-            ToolRegistry((EchoTool(), EchoTool()))
+            ToolRegistry(duplicate_tools)
 
     def test_non_integer_or_non_positive_output_limit_is_rejected(self) -> None:
+        registry = ToolRegistry()
         for limit in (0, -1, True, 1.5):
             with self.subTest(limit=limit), self.assertRaises(ValueError):
-                ToolExecutor(ToolRegistry(), self.policy, max_output_chars=limit)
+                ToolExecutor(registry, self.policy, max_output_chars=limit)
 
 
 if __name__ == "__main__":

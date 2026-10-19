@@ -105,8 +105,9 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         other = replace(self.settings, memory=MemorySettings(project_id="two"))
         build_session_application(other, approve_delete=True).clear("chat")
         self.assertIsNotNone(saver.get_tuple(saver.config("chat")))
+        unapproved = build_session_application(self.settings)
         with self.assertRaises(PermissionRequired):
-            build_session_application(self.settings).clear("chat")
+            unapproved.clear("chat")
         build_session_application(self.settings, approve_delete=True).clear("chat")
         self.assertIsNone(saver.get_tuple(saver.config("chat")))
 
@@ -132,8 +133,9 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_busy_session_cannot_be_cleared_by_another_application(self):
         saver = self.saver()
+        deletion = build_session_application(self.settings, approve_delete=True)
         with saver.lease(saver.config("chat")), self.assertRaises(ToolError) as caught:
-            build_session_application(self.settings, approve_delete=True).clear("chat")
+            deletion.clear("chat")
         self.assertEqual(caught.exception.code, "session_busy")
 
     async def test_official_summary_is_authorized_and_retained(self):

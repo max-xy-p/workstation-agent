@@ -20,6 +20,7 @@
 | [上下文管理方案](context-design.md) | 产品与开发人员 | 已确认方案及实现范围 |
 | [运行控制](run-control.md) | 使用者与开发人员 | 工具审批与恢复、超时、取消及权限边界 |
 | [Agent 运行机制](agent.md) | Agent 开发人员 | 状态机、执行序列、错误和扩展点 |
+| [Sonar 修复说明](sonar-review.md) | 开发人员 | 服务端报告的逐类处理、保留原因和验证范围 |
 | [开发指南](development.md) | 贡献者 | 环境、命令、添加 Provider/Tool/Repository 的流程 |
 | [开发约定](../AGENTS.md) | AI Agent 与贡献者 | 仓库边界、编码规则、测试和完成定义 |
 

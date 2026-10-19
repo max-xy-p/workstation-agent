@@ -17,7 +17,7 @@ def terms(text: str) -> list[str]:
     """保留技术标识符，中文使用单字与双字滑窗，索引和查询保持一致。"""
     result = []
     for match in re.finditer(
-        r"[a-zA-Z0-9_]+(?:[./:-][a-zA-Z0-9_]+)*|[\u3400-\u9fff]+", text.casefold()
+        r"\w+(?:[./:-]\w+)*|[\u3400-\u9fff]+", text.casefold(), flags=re.ASCII
     ):
         value = match[0]
         if re.fullmatch(r"[\u3400-\u9fff]+", value):

@@ -25,6 +25,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from ...memory.service import redact
 from ...tools.contracts import ToolError
 
+_UNINITIALIZED_SESSION = "会话存储未初始化"
+
 
 class SessionSerializer:
     """保留框架消息协议，持久化时清除工具正文并脱敏已知秘密。"""
@@ -175,7 +177,7 @@ class SQLiteSessionBackend:
         """保存完整检查点，必要时由官方组件创建或升级会话表。"""
         with self._saver(write=True) as saver:
             if saver is None:
-                raise ToolError("会话存储未初始化", code="storage_failed")
+                raise ToolError(_UNINITIALIZED_SESSION, code="storage_failed")
             return saver.put(config, checkpoint, metadata, new_versions)
 
     def put_writes(
@@ -188,12 +190,12 @@ class SQLiteSessionBackend:
         """保存节点的中间结果，让恢复流程识别已经成功执行的节点。"""
         with self._saver(write=True) as saver:
             if saver is None:
-                raise ToolError("会话存储未初始化", code="storage_failed")
+                raise ToolError(_UNINITIALIZED_SESSION, code="storage_failed")
             return saver.put_writes(config, writes, task_id, task_path)
 
     def delete_thread(self, thread_id: str) -> None:
         """删除指定会话的框架状态；调用方负责先检查权限并持有会话锁。"""
         with self._saver(write=True) as saver:
             if saver is None:
-                raise ToolError("会话存储未初始化", code="storage_failed")
+                raise ToolError(_UNINITIALIZED_SESSION, code="storage_failed")
             return saver.delete_thread(thread_id)

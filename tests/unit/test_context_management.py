@@ -224,7 +224,11 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
         ]
         failed = AsyncMock(side_effect=ValueError("private-summary-failure"))
         with patch("workstation_agent.agent.context.SummarizationMiddleware.abefore_model", failed):
-            await graph.ainvoke({"messages": history}, config={"configurable": {"thread_id": "test"}}, context=runtime)
+            await graph.ainvoke(
+                {"messages": history},
+                config={"configurable": {"thread_id": "test"}},
+                context=runtime,
+            )
         self.assertEqual(failed.await_count, 1)
         self.assertEqual(runtime.summary_calls, 1)
         self.assertEqual(len(model.requests), 2)
@@ -250,13 +254,18 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
             HumanMessage("当前要求"),
         ]
         cancelled = AsyncMock(side_effect=asyncio.CancelledError())
+        runtime = ContextRuntime(task="当前要求")
         with (
             patch(
                 "workstation_agent.agent.context.SummarizationMiddleware.abefore_model", cancelled
             ),
             self.assertRaises(NodeCancelledError) as caught,
         ):
-            await graph.ainvoke({"messages": history}, config={"configurable": {"thread_id": "test"}}, context=ContextRuntime(task="当前要求"))
+            await graph.ainvoke(
+                {"messages": history},
+                config={"configurable": {"thread_id": "test"}},
+                context=runtime,
+            )
         self.assertIsInstance(caught.exception.__cause__, asyncio.CancelledError)
         self.assertEqual(model.requests, [])
 
@@ -282,7 +291,8 @@ class ContextManagementTests(unittest.IsolatedAsyncioTestCase):
         runtime = ContextRuntime(task="找文档")
         await build_agent(model, [tool]).ainvoke(
             {"messages": [HumanMessage("找文档")]},
-            config={"configurable": {"thread_id": "test"}}, context=runtime
+            config={"configurable": {"thread_id": "test"}},
+            context=runtime,
         )
         bodies = "\n".join(m.text for m in model.requests[-1] if isinstance(m, ToolMessage))
         self.assertEqual(bodies.count("独特原文正文"), 1)
@@ -413,22 +423,19 @@ class ContextBoundaryTests(unittest.TestCase):
 
     def test_board_protects_user_owned_fields_and_requires_source_for_facts(self) -> None:
         board = initialize([HumanMessage("用户目标", id="user")], None, ContextRuntime())
+        forbidden_fields = {"goal": "篡改目标"}
         with self.assertRaises(ValueError):
-            UpdateStatusArguments.model_validate({"goal": "篡改目标"})
+            UpdateStatusArguments.model_validate(forbidden_fields)
         operation = UpdateTaskStatusTool(board, {"source": "实际工具结果"})
+        facts = UpdateStatusArguments.model_validate(
+            {"facts": [{"text": "虚构事实", "source": "source", "confirmed": True}]}
+        )
         with self.assertRaises(ToolError):
-            operation.run(
-                UpdateStatusArguments.model_validate(
-                    {
-                        "facts": [
-                            {"text": "虚构事实", "source": "source", "confirmed": True},
-                        ]
-                    }
-                )
-            )
+            operation.run(facts)
         self.assertEqual(operation.board["goal"], "用户目标")
+        unknown_board = json.loads(json.dumps({**board, "schema_version": 999}))
         with self.assertRaises(ValueError):
-            restore_board(json.loads(json.dumps({**board, "schema_version": 999})))
+            restore_board(unknown_board)
 
     def test_memory_invalidation_also_removes_board_facts_and_completed_evidence(self) -> None:
         board = initialize([HumanMessage("任务", id="user")], None, ContextRuntime())
@@ -464,6 +471,11 @@ class ContextBoundaryTests(unittest.TestCase):
             )
             self.assertEqual(second, "丁戊己")
             path.write_text("修改后的文件", encoding="utf-8")
+            # 两次内容的字节数相同，显式推进时间戳，避免依赖 Windows 的更新时间粒度。
+            import os
+
+            rewritten = path.stat()
+            os.utime(path, ns=(rewritten.st_atime_ns, rewritten.st_mtime_ns + 1_000_000_000))
             with self.assertRaises(ToolError) as caught:
                 tool.invoke({"path": "note.txt", "offset": 3, "expected_version": version})
             self.assertEqual(caught.exception.code, "source_changed")

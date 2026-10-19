@@ -182,8 +182,9 @@ class ExtractionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             max_calls=1,
         )
         model.invoke("one")
+        bound_model = model.bind_tools([])
         with self.assertRaises(ToolError):
-            model.bind_tools([]).invoke("two")
+            bound_model.invoke("two")
 
     async def test_unchanged_langmem_snapshot_does_not_consume_candidate_budget(self):
         from workstation_agent.memory.models import MemoryRecord, MemorySource

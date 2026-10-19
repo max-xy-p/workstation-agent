@@ -25,15 +25,19 @@ class RagSearchGuard(AgentMiddleware[ContextAgentState, ContextRuntime]):
             (i for i, message in enumerate(messages) if isinstance(message, HumanMessage)),
             default=0,
         )
-        for message in messages[start:]:
-            if isinstance(message, AIMessage):
-                for call in message.tool_calls:
-                    if call["name"] == "search_documents":
-                        key = json.dumps(call["args"], sort_keys=True, ensure_ascii=False)
-                        # 最新请求尚未执行，重复时在工具操作前停止。
-                        if key in seen and call["id"] == request.tool_call["id"]:
-                            raise RagSearchStopped("重复检索没有新增证据需求")
-                        seen.add(key)
+        calls = (
+            call
+            for message in messages[start:]
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+            if call["name"] == "search_documents"
+        )
+        for call in calls:
+            key = json.dumps(call["args"], sort_keys=True, ensure_ascii=False)
+            # 最新请求尚未执行，重复时在工具操作前停止。
+            if key in seen and call["id"] == request.tool_call["id"]:
+                raise RagSearchStopped("重复检索没有新增证据需求")
+            seen.add(key)
 
     def wrap_tool_call(
         self,

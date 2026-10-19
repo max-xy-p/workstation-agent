@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 from hashlib import sha256
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolCall, ToolMessage
 
 from .selection import rag_evidence
 from .state import ContextRuntime, ResultReference, TaskBoard, restore_board, utc_now
@@ -58,50 +59,13 @@ def collect_results(
         call["id"]: call for m in messages if isinstance(m, AIMessage) for call in m.tool_calls
     }
     failures: list[str] = []
-    for message in messages:
-        if not isinstance(message, ToolMessage) or message.name == "update_task_status":
-            continue
-        identity = message.id or message.tool_call_id
-        if seen is not None:
-            if identity in seen:
-                continue
-            seen.add(identity)
+    for message in _unseen_tool_results(messages, seen):
         if message.status == "error":
             failures.append(f"工具 {message.name or 'tool'} 执行失败，调用 {message.tool_call_id}")
             continue
-        call = calls.get(message.tool_call_id)
-        # 恢复后的工具消息没有原始正文，仍可保留已有来源；不重新把它判作新的凭据。
-        if call is None or "[工具结果未持久化" in message.text:
-            continue
-        location = ""
-        version = sha256(message.text.encode()).hexdigest()
-        evidence = rag_evidence(message)
-        if evidence:
-            location = "; ".join(item["citation"] for item in evidence)[:1000]
-            version = evidence[0]["checksum"]
-        elif message.name == "read_text_file":
-            path = call["args"].get("path")
-            if isinstance(path, str):
-                location = path[:500]
-                offset = call["args"].get("offset", 0)
-                location += f"@offset={offset}"
-        reference: ResultReference = {
-            "id": message.tool_call_id,
-            "tool": message.name or "tool",
-            "location": location,
-            "version": version,
-        }
-        previous = refs.get(message.tool_call_id)
-        if previous is not None and previous != reference:
-            # 调用 ID 被复用但来源已变化时，旧事实和验收结果不能沿用。
-            board["facts"] = [
-                fact for fact in board["facts"] if fact["source"] != message.tool_call_id
-            ]
-            for item in board["items"]:
-                if message.tool_call_id in item["evidence"] and item["status"] == "completed":
-                    item["status"] = "pending_confirmation"
-            board["revision"] += 1
-        refs[message.tool_call_id] = reference
+        reference = _result_reference(message, calls.get(message.tool_call_id))
+        if reference is not None:
+            _replace_reference(board, refs, reference)
     # 已有任务项引用的凭据不会因新增结果被删除，其余保留最近 32 项。
     used = {source for item in board["items"] for source in item["evidence"]}
     values = list(refs.values())
@@ -110,6 +74,58 @@ def collect_results(
     board["blockers"] = list(dict.fromkeys([*board["blockers"], *failures]))[-8:]
     board["updated_at"] = utc_now()
     return board
+
+
+def _unseen_tool_results(
+    messages: list[AnyMessage], seen: set[str] | None
+) -> Iterator[ToolMessage]:
+    """忽略内部状态工具和已处理消息，避免重复记录错误或引用。"""
+    for message in messages:
+        if not isinstance(message, ToolMessage) or message.name == "update_task_status":
+            continue
+        identity = message.id or message.tool_call_id
+        if seen is not None:
+            if identity in seen:
+                continue
+            seen.add(identity)
+        yield message
+
+
+def _result_reference(message: ToolMessage, call: ToolCall | None) -> ResultReference | None:
+    """仅从实际成功结果提取安全位置和版本；恢复占位消息不能成为新凭据。"""
+    if call is None or "[工具结果未持久化" in message.text:
+        return None
+    location = ""
+    version = sha256(message.text.encode()).hexdigest()
+    evidence = rag_evidence(message)
+    if evidence:
+        location = "; ".join(item["citation"] for item in evidence)[:1000]
+        version = evidence[0]["checksum"]
+    elif message.name == "read_text_file":
+        path = call["args"].get("path")
+        if isinstance(path, str):
+            location = path[:500] + f"@offset={call['args'].get('offset', 0)}"
+    return {
+        "id": message.tool_call_id,
+        "tool": message.name or "tool",
+        "location": location,
+        "version": version,
+    }
+
+
+def _replace_reference(
+    board: TaskBoard, refs: dict[str, ResultReference], reference: ResultReference
+) -> None:
+    """引用来源改变时撤销旧事实和验收，再保存新引用。"""
+    identifier = reference["id"]
+    previous = refs.get(identifier)
+    if previous is not None and previous != reference:
+        board["facts"] = [fact for fact in board["facts"] if fact["source"] != identifier]
+        for item in board["items"]:
+            if identifier in item["evidence"] and item["status"] == "completed":
+                item["status"] = "pending_confirmation"
+        board["revision"] += 1
+    refs[identifier] = reference
 
 
 def invalidate_memory_sources(board: TaskBoard, invalid: set[str]) -> TaskBoard:

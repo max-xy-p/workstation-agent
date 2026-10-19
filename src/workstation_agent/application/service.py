@@ -7,14 +7,14 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from time import time
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from weakref import WeakValueDictionary
 
 from langchain.agents import AgentState
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
 from langchain.agents.middleware.types import InputAgentState, OutputAgentState
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError, NodeCancelledError
 from langgraph.graph import END
@@ -35,6 +35,12 @@ from ..tools.approval import ApprovalDecision, ApprovalRequest
 from ..tools.builtin.memory import MEMORY_SOURCE
 from ..tools.execution import EXECUTION, execute_blocking
 from ..tools.langchain import ToolService
+
+
+class _ExecutionInput(InputAgentState):
+    """在官方消息输入中附加由应用构造的运行控制记录。"""
+
+    run_control: RunControlState
 
 
 class RunRepository(Protocol):
@@ -232,17 +238,7 @@ class AgentApplication:
         saved_control: RunControlState | None = None,
         on_started: Callable[[str], None] | None = None,
     ) -> Run:
-        run = Run(task=task, session_id=session_id)
-        if saved_control is not None:
-            run.id = saved_control["run_id"]
-        runtime.run_id = run.id
-        control_state: RunControlState = saved_control or {
-            "schema_version": 1,
-            "run_id": run.id,
-            "task": task,
-            "deadline": time() + self.run_timeout,
-            "closed": False,
-        }
+        run, control_state = self._prepare_run(task, session_id, runtime, saved_control)
         control = ExecutionControl(control_state["deadline"])
         current = asyncio.current_task()
         if current is None:
@@ -264,54 +260,20 @@ class AgentApplication:
                 on_started(run.id)
             run.transition(RunStatus.PREPARING)
 
-            class ExecutionInput(InputAgentState):
-                run_control: RunControlState
-
-            inputs: ExecutionInput = {
+            inputs: _ExecutionInput = {
                 "messages": [HumanMessage(content=task, id=run.id + "_user")],
                 "run_control": control_state,
             }
             run.transition(RunStatus.THINKING)
-            latest = None
             async with asyncio.timeout(max(0, control.deadline - time())):
-                async for update in self.graph.astream(
+                extraction_step = await self._execute_graph(
                     resume if resume is not None else inputs,
-                    config=config,
-                    context=runtime,
-                    stream_mode="updates",
-                ):
-                    for node, values in update.items():
-                        if on_node:
-                            on_node(node)
-                        # 第三方流更新在此接入，业务处理只接受已构造的官方消息。
-                        if not isinstance(values, dict):
-                            continue
-                        if runtime.board is not None and on_status:
-                            on_status(deepcopy(runtime.board))
-                        for message in values.get("messages", []):
-                            if isinstance(message, AIMessage) and node == "model":
-                                step = Step(run_id=run.id, kind=StepKind.MODEL, name="model")
-                                step.finish()
-                                run.steps.append(step)
-                                latest = message
-                            elif isinstance(message, ToolMessage) and node == "tools":
-                                step = Step(
-                                    run_id=run.id, kind=StepKind.TOOL, name=message.name or "tool"
-                                )
-                                if message.status == "error":
-                                    step.fail("工具调用失败")
-                                else:
-                                    step.finish()
-                                run.steps.append(step)
-                snapshot = await self.graph.aget_state(config)
-                if snapshot.interrupts:
-                    run.transition(RunStatus.WAITING_APPROVAL)
-                    run.error = "工具需要审批，请查看待审批列表后恢复运行"
-                elif latest is None or latest.tool_calls:
-                    run.fail("模型未生成最终答复")
-                else:
-                    extraction_step = await self._extract(run)
-                    run.complete(latest.text)
+                    config,
+                    runtime,
+                    run,
+                    on_node,
+                    on_status,
+                )
         except PermissionRequired:
             run.fail("内部操作缺少授权，请检查会话或记忆配置")
         except (ModelCallLimitExceededError, ToolCallLimitExceededError, GraphRecursionError):
@@ -340,6 +302,123 @@ class AgentApplication:
             if execution_token is not None:
                 EXECUTION.reset(execution_token)
             self._active.pop(run.id, None)
+        await self._finish_run(run, runtime, config, control_state, extraction_step, on_status)
+        return run
+
+    def _prepare_run(
+        self,
+        task: str,
+        session_id: str,
+        runtime: ContextRuntime,
+        saved: RunControlState | None,
+    ) -> tuple[Run, RunControlState]:
+        """新任务创建身份与截止时间，恢复任务沿用检查点中的控制记录。"""
+        run = Run(task=task, session_id=session_id)
+        if saved is not None:
+            run.id = saved["run_id"]
+        runtime.run_id = run.id
+        control: RunControlState = saved or {
+            "schema_version": 1,
+            "run_id": run.id,
+            "task": task,
+            "deadline": time() + self.run_timeout,
+            "closed": False,
+        }
+        return run, control
+
+    async def _execute_graph(
+        self,
+        inputs: InputAgentState | Command,
+        config: RunnableConfig,
+        runtime: ContextRuntime,
+        run: Run,
+        on_node: Callable[[str], None] | None,
+        on_status: Callable[[TaskBoard], None] | None,
+    ) -> Step | None:
+        """消费官方执行图，分别处理审批暂停、缺失答复和正常结束。"""
+        latest = await self._stream_graph(inputs, config, runtime, run, on_node, on_status)
+        snapshot = await self.graph.aget_state(config)
+        if snapshot.interrupts:
+            run.transition(RunStatus.WAITING_APPROVAL)
+            run.error = "工具需要审批，请查看待审批列表后恢复运行"
+            return None
+        if latest is None or latest.tool_calls:
+            run.fail("模型未生成最终答复")
+            return None
+        extraction = await self._extract(run)
+        run.complete(latest.text)
+        return extraction
+
+    async def _stream_graph(
+        self,
+        inputs: InputAgentState | Command,
+        config: RunnableConfig,
+        runtime: ContextRuntime,
+        run: Run,
+        on_node: Callable[[str], None] | None,
+        on_status: Callable[[TaskBoard], None] | None,
+    ) -> AIMessage | None:
+        """只将正式模型和工具消息计入业务步骤，中间件更新用于通知。"""
+        latest: AIMessage | None = None
+        async for update in self.graph.astream(
+            inputs, config=config, context=runtime, stream_mode="updates"
+        ):
+            for node, values in update.items():
+                message = self._consume_update(node, values, run, runtime, on_node, on_status)
+                if message is not None:
+                    latest = message
+        return latest
+
+    def _consume_update(
+        self,
+        node: str,
+        values: Any,
+        run: Run,
+        runtime: ContextRuntime,
+        on_node: Callable[[str], None] | None,
+        on_status: Callable[[TaskBoard], None] | None,
+    ) -> AIMessage | None:
+        """在框架流接入边界忽略非字段更新，再通知调用方并记录正式消息。"""
+        if on_node:
+            on_node(node)
+        if not isinstance(values, dict):
+            return None
+        if runtime.board is not None and on_status:
+            on_status(deepcopy(runtime.board))
+        return self._record_messages(node, values, run)
+
+    @staticmethod
+    def _record_messages(node: str, values: dict[str, Any], run: Run) -> AIMessage | None:
+        """框架流更新允许开放字段，在接入边界校验消息后再记录业务步骤。"""
+        messages = TypeAdapter(list[AnyMessage | RemoveMessage]).validate_python(
+            values.get("messages", [])
+        )
+        latest: AIMessage | None = None
+        for message in messages:
+            if isinstance(message, AIMessage) and node == "model":
+                step = Step(run_id=run.id, kind=StepKind.MODEL, name="model")
+                step.finish()
+                run.steps.append(step)
+                latest = message
+            elif isinstance(message, ToolMessage) and node == "tools":
+                step = Step(run_id=run.id, kind=StepKind.TOOL, name=message.name or "tool")
+                if message.status == "error":
+                    step.fail("工具调用失败")
+                else:
+                    step.finish()
+                run.steps.append(step)
+        return latest
+
+    async def _finish_run(
+        self,
+        run: Run,
+        runtime: ContextRuntime,
+        config: RunnableConfig,
+        control_state: RunControlState,
+        extraction_step: Step | None,
+        on_status: Callable[[TaskBoard], None] | None,
+    ) -> None:
+        """保存收尾状态、请求用量和提取结果，最后通知调用方。"""
         if run.status != RunStatus.WAITING_APPROVAL:
             await self._close_run(config, control_state)
         for usage in runtime.usages:
@@ -358,7 +437,6 @@ class AgentApplication:
             if on_status:
                 on_status(deepcopy(runtime.board))
         self._save(run)
-        return run
 
     async def _close_run(self, config: RunnableConfig, control: RunControlState) -> None:
         """保存终止标记、补齐被中断的工具结果，并用官方接口清除待执行节点。"""

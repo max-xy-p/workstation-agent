@@ -16,6 +16,7 @@ from langchain_core.messages import (
     HumanMessage,
     RemoveMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.tools import BaseTool
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -99,12 +100,6 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
             return
         start = protect_start(messages)
         task = context.task or (messages[start].text if messages else "")
-        recent = "\n".join(
-            m.text[-500:] for m in messages[:start][-6:] if isinstance(m, HumanMessage | AIMessage)
-        )[-1000:]
-        query = task[-1000:] + "\n" + recent
-        from langchain_core.messages import ToolMessage
-
         mutations = [
             (i, m)
             for i, m in enumerate(messages[start:], start)
@@ -123,43 +118,8 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         changed = bool(new_mutations)
         context.seen_changes.update(m.id or m.tool_call_id for _, m in mutations)
         if changed:
-            if context.board is not None:
-                invalid = {
-                    m.tool_call_id
-                    for m in messages
-                    if isinstance(m, ToolMessage)
-                    and m.name
-                    in {
-                        "search_memory",
-                        "get_memory",
-                        "list_memories",
-                        "remember_memory",
-                        "update_memory",
-                    }
-                }
-                context.board = invalidate_memory_sources(context.board, invalid)
-            last_change = max(i for i, _ in new_mutations)
-            context.invalid_memory_calls.update(
-                m.id or m.tool_call_id
-                for m in messages[: last_change + 1]
-                if isinstance(m, ToolMessage)
-            )
-        # 成功 RAG 查询可作为主题变化的信号，但不会触发自动重查整个知识库。
-        successful = {
-            m.tool_call_id
-            for m in messages[start:]
-            if isinstance(m, ToolMessage) and m.status != "error"
-        }
-        topics = [
-            call["args"].get("query")
-            for m in messages[start:]
-            if isinstance(m, AIMessage)
-            for call in m.tool_calls
-            if call["name"] == "search_documents" and call["id"] in successful
-        ]
-        topic = next((value for value in reversed(topics) if isinstance(value, str)), None)
-        if topic:
-            query = topic[:700] + "\n" + task[-700:]
+            self._invalidate_after_changes(messages, new_mutations, context)
+        query = self._retrieval_query(messages, start, task)
         needs = not context.initialized or changed or query != context.query
         if not needs:
             return
@@ -175,6 +135,60 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         context.candidates = [*stable_rag, *candidates] if context.initialized else candidates
         context.initialized = True
         context.query = query
+
+    @staticmethod
+    def _invalidate_after_changes(
+        messages: list[AnyMessage],
+        mutations: list[tuple[int, ToolMessage]],
+        context: ContextRuntime,
+    ) -> None:
+        """记忆写入成功后撤销旧来源，刷新额度用尽也不会再次发送旧值。"""
+        if context.board is not None:
+            invalid = {
+                message.tool_call_id
+                for message in messages
+                if isinstance(message, ToolMessage)
+                and message.name
+                in {
+                    "search_memory",
+                    "get_memory",
+                    "list_memories",
+                    "remember_memory",
+                    "update_memory",
+                }
+            }
+            context.board = invalidate_memory_sources(context.board, invalid)
+        last_change = max(index for index, _ in mutations)
+        context.invalid_memory_calls.update(
+            message.id or message.tool_call_id
+            for message in messages[: last_change + 1]
+            if isinstance(message, ToolMessage)
+        )
+
+    @staticmethod
+    def _retrieval_query(messages: list[AnyMessage], start: int, task: str) -> str:
+        """有界近期对话辅助记忆查询，成功的文档查询可以提示主题变化。"""
+        recent = "\n".join(
+            message.text[-500:]
+            for message in messages[:start][-6:]
+            if isinstance(message, HumanMessage | AIMessage)
+        )[-1000:]
+        successful = {
+            message.tool_call_id
+            for message in messages[start:]
+            if isinstance(message, ToolMessage) and message.status != "error"
+        }
+        topics = [
+            call["args"].get("query")
+            for message in messages[start:]
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+            if call["name"] == "search_documents" and call["id"] in successful
+        ]
+        topic = next((value for value in reversed(topics) if isinstance(value, str)), None)
+        if topic:
+            return topic[:700] + "\n" + task[-700:]
+        return task[-1000:] + "\n" + recent
 
     def _summary_state(
         self, state: ContextAgentState, context: ContextRuntime, runtime: Runtime[ContextRuntime]

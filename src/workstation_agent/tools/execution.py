@@ -63,6 +63,7 @@ async def execute_blocking[T](callback: Callable[[], T]) -> T:
             try:
                 await asyncio.shield(worker)
             except asyncio.CancelledError:
+                # 重复取消也要等线程收尾；循环结束后由外层 raise 继续传播取消，不能提前释放锁。
                 continue
             except Exception:
                 break

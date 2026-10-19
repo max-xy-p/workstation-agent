@@ -12,7 +12,13 @@ from workstation_agent.bootstrap import build_tool_application
 from workstation_agent.config import Settings
 from workstation_agent.interfaces.mcp_server import build_local_service, build_mcp_server
 from workstation_agent.safety import AllowSafeReadsPolicy, PermissionLevel
-from workstation_agent.tools import PydanticTool, ToolArguments, ToolExecutor, ToolRegistry, ToolResult
+from workstation_agent.tools import (
+    PydanticTool,
+    ToolArguments,
+    ToolExecutor,
+    ToolRegistry,
+    ToolResult,
+)
 
 
 class BlockedTool(PydanticTool[ToolArguments]):
@@ -42,14 +48,18 @@ class MCPAdapterTests(unittest.IsolatedAsyncioTestCase):
                 original = next(t for t in application.tool_catalog() if t["name"] == tool.name)
                 self.assertEqual(tool.input_schema, original["parameters"])
                 self.assertEqual(tool.output_schema, TypeAdapter(ToolResult).json_schema())
-                self.assertEqual(tool.annotations.read_only_hint, original["permission"] == "SAFE_READ")
+                self.assertEqual(
+                    tool.annotations.read_only_hint, original["permission"] == "SAFE_READ"
+                )
             result = await client.call_tool("read_text_file", {})
             self.assertTrue(result.is_error)
             self.assertEqual(result.structured_content["error_code"], "invalid_arguments")
             self.assertEqual(json.loads(result.content[0].text), result.structured_content)
 
     async def test_remote_calls_cannot_bypass_permissions_or_leak_exceptions(self) -> None:
-        executor = ToolExecutor(ToolRegistry((BlockedTool(), ExplodingTool())), AllowSafeReadsPolicy())
+        executor = ToolExecutor(
+            ToolRegistry((BlockedTool(), ExplodingTool())), AllowSafeReadsPolicy()
+        )
         async with Client(build_mcp_server(ToolApplication(executor))) as client:
             denied = await client.call_tool("blocked", {})
             self.assertTrue(denied.is_error)
@@ -60,9 +70,12 @@ class MCPAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_service_refuses_missing_token_or_workspace(self) -> None:
         application = build_tool_application(Settings(Path.cwd()))
+        missing_token = Settings(Path.cwd())
+        missing_workspace = Settings(
+            Path.cwd() / "nonexistent-workstation-directory",
+            service_token="x" * 32,
+        )
         with self.assertRaises(ValueError):
-            build_local_service(application, Settings(Path.cwd()))
+            build_local_service(application, missing_token)
         with self.assertRaises(ValueError):
-            build_local_service(application, Settings(
-                Path.cwd() / "nonexistent-workstation-directory", service_token="x" * 32,
-            ))
+            build_local_service(application, missing_workspace)

@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Literal
 
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from pydantic import Field, JsonValue
@@ -81,36 +81,8 @@ class UpdateTaskStatusTool(PydanticTool[UpdateStatusArguments]):
 
     def run(self, arguments: UpdateStatusArguments) -> str:
         """拒绝无凭据的完成项和无原文支持的已确认事实，不信任模型自述。"""
-        valid = {ref["id"] for ref in self.board["results"]}
-        if len({item.id for item in arguments.items}) != len(arguments.items):
-            raise ToolError("任务项 ID 重复", code="invalid_status")
-        items: list[TaskItem] = []
-        for item in arguments.items:
-            if any(source not in valid for source in item.evidence):
-                raise ToolError("任务项引用不存在或失败的结果", code="invalid_status")
-            if item.status == "completed" and not item.evidence:
-                raise ToolError("标记完成需要结果凭据", code="invalid_status")
-            previous = next((old for old in self.board["items"] if old["id"] == item.id), None)
-            status = item.status
-            if status == "completed":
-                status = "pending_confirmation"
-                # 用户已确认且内容、来源均未变化的项目可以保留确认结果。
-                if (
-                    previous
-                    and previous["status"] == "completed"
-                    and (previous["text"] == item.text and previous["evidence"] == item.evidence)
-                ):
-                    status = "completed"
-            items.append(
-                {"id": item.id, "text": item.text, "status": status, "evidence": item.evidence}
-            )
-        facts: list[TaskFact] = []
-        for fact in arguments.facts:
-            if fact.confirmed and (
-                fact.source not in self.sources or fact.text not in self.sources[fact.source]
-            ):
-                raise ToolError("已确认事实必须有当前可读原文支持", code="invalid_status")
-            facts.append({"text": fact.text, "source": fact.source, "confirmed": fact.confirmed})
+        items = self._validated_items(arguments.items)
+        facts = self._validated_facts(arguments.facts)
         if any(len(text) > 300 for text in arguments.blockers):
             raise ToolError("阻塞说明过长", code="invalid_status")
         supplied = arguments.model_fields_set
@@ -126,6 +98,62 @@ class UpdateTaskStatusTool(PydanticTool[UpdateStatusArguments]):
         self.board["updated_at"] = utc_now()
         return "任务状态已更新"
 
+    def _validated_items(self, proposed: list[StatusItem]) -> list[TaskItem]:
+        """验证唯一 ID 和来源，每个任务项单独判断是否保留用户验收。"""
+        if len({item.id for item in proposed}) != len(proposed):
+            raise ToolError("任务项 ID 重复", code="invalid_status")
+        valid = {ref["id"] for ref in self.board["results"]}
+        return [self._validated_item(item, valid) for item in proposed]
+
+    def _validated_item(self, item: StatusItem, valid: set[str]) -> TaskItem:
+        """模型提交 completed 时仅保留已经由用户确认且内容未变化的项目。"""
+        if any(source not in valid for source in item.evidence):
+            raise ToolError("任务项引用不存在或失败的结果", code="invalid_status")
+        if item.status == "completed" and not item.evidence:
+            raise ToolError("标记完成需要结果凭据", code="invalid_status")
+        status = item.status
+        if status == "completed":
+            previous = next((old for old in self.board["items"] if old["id"] == item.id), None)
+            unchanged = previous == {
+                "id": item.id,
+                "text": item.text,
+                "status": "completed",
+                "evidence": item.evidence,
+            }
+            status = "completed" if unchanged else "pending_confirmation"
+        return {"id": item.id, "text": item.text, "status": status, "evidence": item.evidence}
+
+    def _validated_facts(self, proposed: list[StatusFact]) -> list[TaskFact]:
+        """确认事实必须逐字出现在当前来源中，验证失败时整个更新不写入。"""
+        facts: list[TaskFact] = []
+        for fact in proposed:
+            if fact.confirmed and (
+                fact.source not in self.sources or fact.text not in self.sources[fact.source]
+            ):
+                raise ToolError("已确认事实必须有当前可读原文支持", code="invalid_status")
+            facts.append({"text": fact.text, "source": fact.source, "confirmed": fact.confirmed})
+        return facts
+
+
+def _parallel_status_update(messages: list[AnyMessage]) -> bool:
+    """同一模型消息不能并行覆盖同一份任务状态。"""
+    latest = next(
+        (message for message in reversed(messages) if isinstance(message, AIMessage)), None
+    )
+    return (
+        latest is not None
+        and sum(call["name"] == "update_task_status" for call in latest.tool_calls) > 1
+    )
+
+
+def _status_sources(messages: list[AnyMessage]) -> dict[str, str]:
+    """收集有身份的用户与工具原文，仅用于核对事实引用。"""
+    return {
+        (message.tool_call_id if isinstance(message, ToolMessage) else message.id): message.text
+        for message in messages
+        if message.id and isinstance(message, HumanMessage | ToolMessage)
+    }
+
 
 def task_status_tool() -> BaseTool:
     """使用框架注入状态和调用 ID，模型无法指定另一任务或会话。"""
@@ -139,13 +167,7 @@ def task_status_tool() -> BaseTool:
     ) -> Command:
         """更新进度与来源。仅在实际结果支持时标记完成，简单问答无需使用。"""
         board = runtime.state.get("task_board")
-        latest = next(
-            (m for m in reversed(runtime.state["messages"]) if isinstance(m, AIMessage)), None
-        )
-        parallel = (
-            latest is not None
-            and sum(call["name"] == "update_task_status" for call in latest.tool_calls) > 1
-        )
+        parallel = _parallel_status_update(runtime.state["messages"])
         if board is None or parallel:
             return Command(
                 update={
@@ -159,11 +181,7 @@ def task_status_tool() -> BaseTool:
                     ]
                 }
             )
-        sources: dict[str, str] = {
-            (m.tool_call_id if isinstance(m, ToolMessage) else m.id): m.text
-            for m in runtime.state["messages"]
-            if m.id and isinstance(m, HumanMessage | ToolMessage)
-        }
+        sources = _status_sources(runtime.state["messages"])
         operation = UpdateTaskStatusTool(board, sources)
         result = ToolExecutor(ToolRegistry((operation,)), RunStatePolicy()).execute(
             "update_task_status",

@@ -50,9 +50,11 @@ try {
                 return $serviceProcess
             }
         } catch [System.Net.Http.HttpRequestException] {
-            # 服务尚未就绪，继续等待。
+            # 服务尚未就绪，输出不含原始异常和凭据的诊断后继续等待。
+            Write-Verbose 'Health check could not connect; retrying until readiness timeout.'
         } catch [System.Threading.Tasks.TaskCanceledException] {
             # 单次检查超时后继续重试，仍受总等待时限约束。
+            Write-Verbose 'Health check timed out; retrying until readiness timeout.'
         }
         Start-Sleep -Milliseconds 150
     }

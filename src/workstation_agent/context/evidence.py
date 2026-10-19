@@ -36,29 +36,38 @@ def _block(group: Evidence) -> str:
     return f"[{citation}] {group['heading_path'] or ''}\n{group['content']}\n"
 
 
+def _touches(group: Evidence, incoming: Evidence, begin: int, end: int) -> bool:
+    """只有同文档、版本和章节的非空相连区间才可以合并。"""
+    return (
+        group["document_id"] == incoming["document_id"]
+        and group["checksum"] == incoming["checksum"]
+        and group["section_id"] == incoming["section_id"]
+        and group["source_end"] > group["source_start"]
+        and group["source_start"] <= end
+        and group["source_end"] >= begin
+    )
+
+
+def _connected_groups(groups: list[Evidence], incoming: Evidence) -> tuple[list[int], int, int]:
+    """重复扩展相连区间，直到没有新证据可以加入。"""
+    selected: list[int] = []
+    begin, end = incoming["source_start"], incoming["source_end"]
+    if end <= begin:
+        return selected, begin, end
+    progress = True
+    while progress:
+        progress = False
+        for index, group in enumerate(groups):
+            if index not in selected and _touches(group, incoming, begin, end):
+                selected.append(index)
+                begin, end = min(begin, group["source_start"]), max(end, group["source_end"])
+                progress = True
+    return selected, begin, end
+
+
 def _merge(groups: list[Evidence], incoming: Evidence) -> None:
     """合并所有相连原文区间，保留最早候选的优先位置。"""
-    selected = []
-    begin, end = incoming["source_start"], incoming["source_end"]
-    if end > begin:
-        progress = True
-        while progress:
-            progress = False
-            for i, group in enumerate(groups):
-                if i in selected:
-                    continue
-                if (
-                    group["document_id"] == incoming["document_id"]
-                    and group["checksum"] == incoming["checksum"]
-                    and group["section_id"] == incoming["section_id"]
-                    and group["source_end"] > group["source_start"]
-                    and group["source_start"] <= end
-                    and group["source_end"] >= begin
-                ):
-                    selected.append(i)
-                    begin = min(begin, group["source_start"])
-                    end = max(end, group["source_end"])
-                    progress = True
+    selected, begin, end = _connected_groups(groups, incoming)
     if not selected:
         groups.append(incoming)
         return

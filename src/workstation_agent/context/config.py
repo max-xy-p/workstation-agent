@@ -26,6 +26,18 @@ class ContextSettings:
     board_tokens: int = 1024
 
     def __post_init__(self) -> None:
+        self._validate_token_limits()
+        if not self.output_tokens or not math.isfinite(self.trigger_ratio):
+            raise ContextConfigurationError("输出预留和压缩阈值无效")
+        if not 0 < self.trigger_ratio <= 1 or type(self.summarize) is not bool:
+            raise ContextConfigurationError("压缩配置无效")
+        if self.output_limit is not None and self.output_tokens > self.output_limit:
+            raise ContextConfigurationError("输出预留超过模型输出上限")
+        if self.window is not None:
+            self.input_budget()
+
+    def _validate_token_limits(self) -> None:
+        """模型容量和应用预算分别校验，避免混淆正数与非负数要求。"""
         for value in (self.window, self.input_limit, self.output_limit):
             if value is not None and (type(value) is not int or value < 1):
                 raise ContextConfigurationError("模型容量必须为正整数")
@@ -37,14 +49,6 @@ class ContextSettings:
         ):
             if type(value) is not int or value < 0:
                 raise ContextConfigurationError("上下文预算必须为非负整数")
-        if not self.output_tokens or not math.isfinite(self.trigger_ratio):
-            raise ContextConfigurationError("输出预留和压缩阈值无效")
-        if not 0 < self.trigger_ratio <= 1 or type(self.summarize) is not bool:
-            raise ContextConfigurationError("压缩配置无效")
-        if self.output_limit is not None and self.output_tokens > self.output_limit:
-            raise ContextConfigurationError("输出预留超过模型输出上限")
-        if self.window is not None:
-            self.input_budget()
 
     def input_budget(self) -> int:
         """计算可发送的输入量；缺少窗口配置时拒绝猜测模型容量。"""

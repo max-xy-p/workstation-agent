@@ -18,8 +18,13 @@ class ServiceConfigTests(unittest.TestCase):
 
     def test_invalid_ports_are_rejected(self) -> None:
         for raw in ("0", "65536", "-1", "secret-not-a-port"):
-            with self.subTest(value=raw), patch.dict(
-                "os.environ", {"WORKSTATION_AGENT_SERVICE_PORT": raw}, clear=True,
+            with (
+                self.subTest(value=raw),
+                patch.dict(
+                    "os.environ",
+                    {"WORKSTATION_AGENT_SERVICE_PORT": raw},
+                    clear=True,
+                ),
             ):
                 with self.assertRaises(ValueError) as caught:
                     Settings.from_env()
@@ -27,14 +32,20 @@ class ServiceConfigTests(unittest.TestCase):
 
     def test_token_validation_does_not_echo_credentials(self) -> None:
         for secret in ("too-short-private", "x" * 300, "x" * 32 + "\n", "x" * 32 + "非"):
-            with self.subTest(), patch.dict(
-                "os.environ", {"WORKSTATION_AGENT_SERVICE_TOKEN": secret}, clear=True,
+            with (
+                self.subTest(),
+                patch.dict(
+                    "os.environ",
+                    {"WORKSTATION_AGENT_SERVICE_TOKEN": secret},
+                    clear=True,
+                ),
             ):
                 with self.assertRaises(ValueError) as caught:
                     Settings.from_env()
                 self.assertNotIn(secret, str(caught.exception))
 
     def test_direct_configuration_enforces_new_fields(self) -> None:
+        workspace = Path.cwd()
         for port in (True, 0, 65536, "8765"):
             with self.subTest(port=port), self.assertRaises(ValueError):
-                Settings(Path.cwd(), service_port=port)
+                Settings(workspace, service_port=port)

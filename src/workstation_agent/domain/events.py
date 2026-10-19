@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 class EventType(StrEnum):
     """定义任务、模型和工具事件的类别。"""
+
     RUN_STARTED = "run.started"
     RUN_STATUS_CHANGED = "run.status_changed"
     MODEL_STARTED = "model.started"
@@ -24,6 +25,7 @@ class EventType(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AgentEvent:
     """记录事件类别、所属任务和附加数据。"""
+
     # 事件类别。
     type: EventType
     # 所属任务标识。
@@ -38,10 +40,13 @@ class AgentEvent:
 
 class EventSink(Protocol):
     """约定事件接收方法。"""
+
     def emit(self, event: AgentEvent) -> None: ...
 
 
 class NullEventSink:
     """忽略事件的默认接收器。"""
+
     def emit(self, event: AgentEvent) -> None:
+        # 默认运行不记录事件；需要日志或界面通知时由应用注入实际接收器。
         pass

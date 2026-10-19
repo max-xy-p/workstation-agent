@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 
 import uvicorn
@@ -18,6 +19,7 @@ from mcp.types import (
 )
 from pydantic import TypeAdapter
 from starlette.datastructures import Headers
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -39,6 +41,7 @@ def build_mcp_server(application: ToolApplication) -> Server:
         context: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
+        catalog = await asyncio.to_thread(application.tool_catalog)
         return ListToolsResult(
             tools=[
                 Tool(
@@ -48,7 +51,7 @@ def build_mcp_server(application: ToolApplication) -> Server:
                     output_schema=_RESULT.json_schema(),
                     annotations=ToolAnnotations(read_only_hint=item["permission"] == "SAFE_READ"),
                 )
-                for item in application.tool_catalog()
+                for item in catalog
             ]
         )
 
@@ -124,7 +127,8 @@ def build_local_service(application: ToolApplication, settings: Settings) -> ASG
     if not settings.workspace.is_dir():
         raise ValueError("configured workspace must be an existing directory")
 
-    async def health(request) -> JSONResponse:
+    def health(_request: Request) -> JSONResponse:
+        """返回不含工作区和配置内容的健康状态。"""
         return JSONResponse(
             {"status": "ok", "service": "workstation-agent", "version": __version__}
         )
@@ -149,16 +153,11 @@ def build_local_service(application: ToolApplication, settings: Settings) -> ASG
 def run_local_service(application: ToolApplication, settings: Settings) -> None:
     """以前台方式启动本机工具服务。"""
     app = build_local_service(application, settings)
-    try:
-        uvicorn.run(
-            app,
-            host="127.0.0.1",
-            port=settings.service_port,
-            access_log=False,
-            log_level="warning",
-            proxy_headers=False,
-        )
-    except SystemExit as exc:
-        # 将服务启动失败统一转换为 CLI 错误。
-        if exc.code:
-            raise OSError("local service could not start") from None
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=settings.service_port,
+        access_log=False,
+        log_level="warning",
+        proxy_headers=False,
+    )

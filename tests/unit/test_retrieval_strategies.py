@@ -103,8 +103,8 @@ class MemoryStrategyTests(unittest.TestCase):
             (RetrievalHit(self.current.id, float("inf")),),
             (RetrievalHit(self.current.id, 1.0), RetrievalHit(self.current.id, 0.5)),
         ):
+            service = MemoryService(self.repository, retrieval=RecordingStrategy(hits))
             with self.subTest(hits=hits), self.assertRaises(ToolError) as caught:
-                service = MemoryService(self.repository, retrieval=RecordingStrategy(hits))
                 service.search(self.access, "中文")
             self.assertEqual(caught.exception.code, "invalid_retrieval_output")
 
@@ -113,9 +113,7 @@ class MemoryStrategyTests(unittest.TestCase):
         strategy = RecordingStrategy[MemoryRecord](
             (RetrievalHit(second.id, 0.9), RetrievalHit(self.current.id, 0.8))
         )
-        service = MemoryService(
-            StaticMemoryRepository((self.current, second)), retrieval=strategy
-        )
+        service = MemoryService(StaticMemoryRepository((self.current, second)), retrieval=strategy)
         self.assertEqual(service.search(self.access, "任意问题", limit=1), (second,))
 
     def test_empty_candidates_skip_strategy(self) -> None:
@@ -134,7 +132,8 @@ class KnowledgeStrategyTests(unittest.TestCase):
         self.original.ingest("two.md", "# 设置\n其他项目内容。", {"project": "two"})
         first = self.repository.get("one.md")
         second = self.repository.get("two.md")
-        assert first is not None and second is not None
+        assert first is not None
+        assert second is not None
         self.first = first
         self.second = second
 
@@ -154,16 +153,15 @@ class KnowledgeStrategyTests(unittest.TestCase):
     def test_outside_chunk_and_nonfinite_score_are_rejected(self) -> None:
         current_id = self.first.chunks[0].id
         foreign_id = self.second.chunks[0].id
-        assert current_id is not None and foreign_id is not None
+        assert current_id is not None
+        assert foreign_id is not None
         for hits in (
             (RetrievalHit(foreign_id, 1.0),),
             (RetrievalHit("unknown", 1.0),),
             (RetrievalHit(current_id, float("nan")),),
             (RetrievalHit(current_id, 1.0), RetrievalHit(current_id, 0.5)),
         ):
-            app = RagApplication(
-                self.repository, self.settings, retrieval=RecordingStrategy(hits)
-            )
+            app = RagApplication(self.repository, self.settings, retrieval=RecordingStrategy(hits))
             with self.subTest(hits=hits), self.assertRaises(ToolError) as caught:
                 app.search("设置", {"project": "one"}, 1)
             self.assertEqual(caught.exception.code, "invalid_retrieval_output")

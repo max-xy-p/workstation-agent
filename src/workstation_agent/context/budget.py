@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
-from dataclasses import replace
+from copy import replace
 
 from langchain.agents.middleware.types import ModelRequest
 from langchain.agents.structured_output import (

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 class PermissionLevel(IntEnum):
     """按风险划分工具所需的权限等级。"""
+
     SAFE_READ = 10
     CONTROLLED_WRITE = 20
     SENSITIVE = 30
@@ -20,13 +21,15 @@ class PermissionRequired(RuntimeError):
 
 class ApprovalPolicy(Protocol):
     """约定工具调用的授权检查方法。"""
+
     def allows(
         self, tool_name: str, permission: PermissionLevel, arguments: dict[str, Any]
     ) -> bool: ...
 
 
-class AllowSafeReadsPolicy:
+class AllowSafeReadsPolicy(ApprovalPolicy):
     """默认只允许安全读取工具。"""
+
     def allows(
         self, tool_name: str, permission: PermissionLevel, arguments: dict[str, Any]
     ) -> bool:

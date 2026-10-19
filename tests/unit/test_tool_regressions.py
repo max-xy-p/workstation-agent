@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from workstation_agent.tools.contracts import ToolDefinition
 from workstation_agent.safety import AllowSafeReadsPolicy, PermissionLevel, PermissionRequired
 from workstation_agent.tools import ToolExecutor, ToolRegistry, default_tools
+from workstation_agent.tools.contracts import ToolDefinition
 
 
 class ExplodingTool:
@@ -52,8 +52,9 @@ class ToolRegressionTests(unittest.TestCase):
     def test_executor_entry_checks_permission(self) -> None:
         tool = SensitiveTool()
         registry = ToolRegistry((tool,))
+        executor = ToolExecutor(registry, AllowSafeReadsPolicy())
         with self.assertRaises(PermissionRequired):
-            ToolExecutor(registry, AllowSafeReadsPolicy()).execute("sensitive", {})
+            executor.execute("sensitive", {})
         self.assertFalse(tool.called)
 
 

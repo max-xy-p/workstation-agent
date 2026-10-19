@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 
-def _flag(name, default=False):
+def _flag(name: str, default: bool = False) -> bool:
     raw = os.getenv("WORKSTATION_AGENT_" + name, "true" if default else "false").lower()
     if raw not in {"true", "false", "1", "0"}:
         raise ValueError("记忆布尔配置无效")
@@ -28,7 +28,7 @@ class MemorySettings:
     extract_limit: int = 5
     extract_calls: int = 3
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for name in ("enabled", "sessions", "auto_extract", "allow_remote"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError("记忆开关必须为布尔值")
@@ -50,6 +50,12 @@ class MemorySettings:
             or self.extract_calls > 8
         ):
             raise ValueError("记忆规模超过支持范围")
+        self._validate_identity()
+        if self.auto_extract and not self.enabled:
+            raise ValueError("自动提取需要启用记忆")
+
+    def _validate_identity(self) -> None:
+        """用户和项目标识不能为空，且最多包含 128 个字符。"""
         if not isinstance(self.user_id, str) or not self.user_id.strip() or len(self.user_id) > 128:
             raise ValueError("记忆用户标识无效")
         if self.project_id is not None and (
@@ -58,11 +64,9 @@ class MemorySettings:
             or len(self.project_id) > 128
         ):
             raise ValueError("记忆项目标识无效")
-        if self.auto_extract and not self.enabled:
-            raise ValueError("自动提取需要启用记忆")
 
     @classmethod
-    def from_env(cls):
+    def from_env(cls) -> "MemorySettings":
         """环境变量不接受模糊布尔值，错误不回显输入。"""
         try:
             return cls(

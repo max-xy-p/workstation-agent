@@ -153,3 +153,24 @@ Memory 用于可复用的用户和任务经验，不用于保存外部文档全�
 长循环调用 `tools.execution.check_execution`，第三方网络调用需要自身的超时。
 会话包装器保留官方 get_tuple、put 等明确方法及返回类型，不改成字符串分发。
 `SessionSerializer` 的 Any 仅用于框架通用序列化边界；进入应用后将状态校验为 TaskBoard、RunControlState 或审批模型。
+
+## 处理静态分析建议
+
+先读取具体报告和规则，确认提示指向当前代码，再修改实现。函数复杂时按实际职责拆分，
+保持授权、事务、预算和失败路径；不要为降低指标引入无用包装器或字符串分发。
+异常测试的准备步骤放在 assertRaises 外，避免由构造失败误判业务调用符合预期。
+保留框架要求的协议参数；遇到误报或部署约束，记录原因和回归证据，不直接关闭规则。
+本次处理记录见 [Sonar 修复说明](sonar-review.md)。
+
+需要向 Sonar 提供覆盖率时，可用 Coverage.py 统计测试实际执行了哪些代码。
+它只在检查时通过 uv 临时加载，不加入 Agent 的运行依赖；采集会增加测试耗时。
+以下命令把报告保存到系统临时目录，避免把本机报告提交到仓库：
+
+```powershell
+uv run --with coverage python -m coverage run --data-file "$env:TEMP/wa-sonar-coverage.data" --source src/workstation_agent -m unittest discover -s tests -v
+uv run --with coverage python -m coverage xml --data-file "$env:TEMP/wa-sonar-coverage.data" -o "$env:TEMP/wa-sonar-report.xml"
+```
+
+测试应显示 `OK`，第二条命令应提示 XML 报告已写入。
+复扫时将该 XML 文件的绝对路径传给 `sonar.python.coverage.reportPaths`。
+这组命令统计当前测试进程；测试另行启动的 CLI 或服务进程不会自动计入，所以结果不包含这些子进程的执行记录。

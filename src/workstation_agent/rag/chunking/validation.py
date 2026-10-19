@@ -55,47 +55,90 @@ def validate_chunks(
     closed_sections: set[str] = set()
     previous_section: str | None = None
     for ordinal, (chunk, fields) in enumerate(zip(chunks, metadata, strict=True)):
+        _validate_origin(document, fields, ordinal)
+        _validate_position(chunk, fields, text, previous_start, covered_end, settings)
+        _validate_section(fields, previous_section, closed_sections, covered_end)
+        _validate_neighbors(chunks, metadata, ordinal)
         begin, end = fields.source_start, fields.source_end
-        if len(chunk.page_content) > settings.chunk_size:
-            raise ChunkBudgetExceeded("分块长度超过预算")
-        if (
-            fields.document_id != document.id
-            or fields.source_uri != document.source_uri
-            or fields.title != document.title
-            or fields.checksum != document.checksum
-            or fields.media_type != document.media_type
-            or fields.ordinal != ordinal
-        ):
-            raise InvalidChunkingResult("分块来源或顺序不一致")
-        if (
-            not chunk.page_content.strip()
-            or not 0 <= begin < end <= len(text)
-            or begin < previous_start
-            or end <= covered_end
-            or text[begin:end] != chunk.page_content
-            or fields.line_start != text.count("\n", 0, begin) + 1
-            or fields.line_end != text.count("\n", 0, end - 1) + 1
-        ):
-            raise InvalidChunkingResult("分块原文或位置无效")
-        if begin > covered_end and text[covered_end:begin].strip():
-            raise InvalidChunkingResult("分块遗漏正文")
-        if fields.section_id != previous_section:
-            if fields.section_id in closed_sections or begin < covered_end:
-                raise InvalidChunkingResult("章节不连续或跨章节重叠")
-            if previous_section is not None:
-                closed_sections.add(previous_section)
-        before = metadata[ordinal - 1] if ordinal else None
-        after = metadata[ordinal + 1] if ordinal + 1 < len(chunks) else None
-        expected_previous = (
-            chunks[ordinal - 1].id if before and before.section_id == fields.section_id else None
-        )
-        expected_next = (
-            chunks[ordinal + 1].id if after and after.section_id == fields.section_id else None
-        )
-        if fields.previous_chunk_id != expected_previous or fields.next_chunk_id != expected_next:
-            raise InvalidChunkingResult("分块邻接关系无效")
         covered_end = end
         previous_start = begin
         previous_section = fields.section_id
     if text[covered_end:].strip():
         raise InvalidChunkingResult("分块遗漏正文")
+
+
+def _validate_origin(document: SourceDocument, fields: _ChunkMetadata, ordinal: int) -> None:
+    """策略不能更换文档来源或声明不同的块顺序。"""
+    actual = (
+        fields.document_id,
+        fields.source_uri,
+        fields.title,
+        fields.checksum,
+        fields.media_type,
+        fields.ordinal,
+    )
+    expected = (
+        document.id,
+        document.source_uri,
+        document.title,
+        document.checksum,
+        document.media_type,
+        ordinal,
+    )
+    if actual != expected:
+        raise InvalidChunkingResult("分块来源或顺序不一致")
+
+
+def _validate_position(
+    chunk: Document,
+    fields: _ChunkMetadata,
+    text: str,
+    previous_start: int,
+    covered_end: int,
+    settings: RagSettings,
+) -> None:
+    """逐字核对原文及行号，并拒绝越界、倒序、遗漏与超长块。"""
+    begin, end = fields.source_start, fields.source_end
+    if len(chunk.page_content) > settings.chunk_size:
+        raise ChunkBudgetExceeded("分块长度超过预算")
+    if (
+        not chunk.page_content.strip()
+        or not 0 <= begin < end <= len(text)
+        or begin < previous_start
+        or end <= covered_end
+        or text[begin:end] != chunk.page_content
+        or fields.line_start != text.count("\n", 0, begin) + 1
+        or fields.line_end != text.count("\n", 0, end - 1) + 1
+    ):
+        raise InvalidChunkingResult("分块原文或位置无效")
+    if begin > covered_end and text[covered_end:begin].strip():
+        raise InvalidChunkingResult("分块遗漏正文")
+
+
+def _validate_section(
+    fields: _ChunkMetadata, previous: str | None, closed: set[str], covered_end: int
+) -> None:
+    """章节只能连续出现，新的章节不能覆盖上一章节的正文。"""
+    if fields.section_id == previous:
+        return
+    if fields.section_id in closed or fields.source_start < covered_end:
+        raise InvalidChunkingResult("章节不连续或跨章节重叠")
+    if previous is not None:
+        closed.add(previous)
+
+
+def _validate_neighbors(
+    chunks: tuple[Document, ...], metadata: list[_ChunkMetadata], ordinal: int
+) -> None:
+    """前后引用只能指向同章节中实际相邻的块。"""
+    fields = metadata[ordinal]
+    before = metadata[ordinal - 1] if ordinal else None
+    after = metadata[ordinal + 1] if ordinal + 1 < len(chunks) else None
+    expected_previous = (
+        chunks[ordinal - 1].id if before and before.section_id == fields.section_id else None
+    )
+    expected_next = (
+        chunks[ordinal + 1].id if after and after.section_id == fields.section_id else None
+    )
+    if fields.previous_chunk_id != expected_previous or fields.next_chunk_id != expected_next:
+        raise InvalidChunkingResult("分块邻接关系无效")
