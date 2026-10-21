@@ -1,140 +1,127 @@
-# 独立 Agent HTTP 服务
+# Agent HTTP 接口
 
-Agent HTTP 服务让桌面界面或其他本机客户端提交完整任务，查询运行进度、取消任务和恢复工具审批。
-`serve-agent` 启动 Agent 进程；现有 `serve` 仍启动 MCP 工具服务。
-两者分别监听 `127.0.0.1:8766` 和 `127.0.0.1:8765`，使用各自的访问令牌。
+本机客户端通过 HTTP 管理任务、运行状态、会话和文本历史。`serve-agent` 运行完整 Agent；
+`serve` 仅提供 MCP 工具，两者使用不同端口和令牌。
 
-## 配置和启动
+## 启动与认证
 
-先按 [README](../README.md) 配置模型名称、API Key、接口地址和真实上下文窗口。
-还需要按 [数据库说明](database.md) 配置 PostgreSQL 并执行 `init-db`。
-模型需要支持 OpenAI 兼容的 Chat Completions 和工具调用。
-在项目根目录的 PowerShell 7 中运行：
+先按 [README](../README.md) 配置模型与真实上下文窗口，按 [数据库部署](database.md) 配置 PostgreSQL 并执行 `init-db`。
+使用同进程工具时：
 
 ```powershell
-uv sync
 $env:WORKSTATION_AGENT_HTTP_TOKEN = [guid]::NewGuid().ToString('N')
-$service = & .\scripts\start-local-service.ps1
-uv run workstation-agent doctor --http --agent
-uv run workstation-agent serve-agent
-```
-
-`doctor --http` 检查 Agent HTTP 令牌、工作区、模型和上下文配置，不请求外部模型；
-加上 `--agent` 还会要求 MCP 令牌已配置。该命令不探测端口或已运行的服务。
-服务启动后访问 `/health` 返回 `status: ok`，说明应用和工具连接已完成初始化；这不验证外部模型可用性。
-`serve-agent` 前台运行，按 Ctrl+C 停止；活动任务完成协作取消后才关闭工具连接。
-
-同进程工具模式可独立启动，无需 MCP 服务：
-
-```powershell
 uv run workstation-agent doctor --http
 uv run workstation-agent serve-agent --transport local
 ```
 
-启动 `serve-agent` 表示允许在当前工作区内保存会话检查点，服务会启用现有会话持久化。
-审批等待和会话续聊需要这些检查点；工具正文不会保存到会话中，已知凭据继续脱敏。
-数据目录、身份隔离和删除会话的方式见 [记忆与会话说明](memory.md)。
+默认 MCP 模式需先启动 [工具服务](agent.md#本机-mcp-服务)，再运行 `serve-agent`；
+`doctor --http --agent` 同时检查两类服务配置，不请求模型或探测端口。
+服务前台运行，Ctrl+C 会等待活动任务取消收尾后关闭连接。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `WORKSTATION_AGENT_HTTP_PORT` | `8766` | Agent HTTP 服务端口，必须为 1–65535 的整数；MCP 模式下不能与工具服务端口相同 |
-| `WORKSTATION_AGENT_HTTP_TOKEN` | 未配置 | 启动前必须注入 32–256 个字母、数字、下划线或连字符；持有者可以提交任务及审批 |
+| `WORKSTATION_AGENT_HTTP_PORT` | 8766 | 端口 1–65535；MCP 模式不能与工具端口相同 |
+| `WORKSTATION_AGENT_HTTP_TOKEN` | 未配置 | 32–256 个字母、数字、下划线或连字符 |
 
-项目不会自动读取 `.env`。HTTP 令牌仅由接口用于认证，不作为工具授权参数传给模型。
-请求不能修改工作区、模型配置、工具权限或服务身份。
+默认地址 `http://127.0.0.1:8766`。除 `GET /health` 外，请求须携带 `Authorization: Bearer 令牌`。
+JSON 请求使用 `Content-Type: application/json`；项目不会自动读取 `.env`。
+服务只监听本机，校验 Host 和 Origin，不提供跨域或远程部署配置。
+同一令牌代表当前本机用户的全部接口权限，请求不能覆盖身份、工作区、模型或工具策略。
 
-## 提交任务和查看结果
+## 运行接口
 
-保持上述服务运行，在另一个已配置相同 HTTP 令牌的 PowerShell 终端中运行以下命令。
-`$headers` 中应使用启动 Agent 服务时设置的令牌，不能重新生成一个不同值。
+| 方法与路径 | 请求与结果 |
+| --- | --- |
+| `GET /health` | 返回服务状态和版本；就绪不代表外部模型已验证可用 |
+| `POST /runs` | 必填 `task`；可选 `session_id`、`constraints`、`criteria`、`new_task`；返回 202 和运行记录 |
+| `GET /runs` | 当前进程的最近运行列表，按更新时间倒序 |
+| `GET /runs/{run_id}` | 运行详情，不存在返回 404 |
+| `POST /runs/{run_id}/cancel` | 活动运行返回 202；已结束返回 200 和 `cancel_requested:false` |
+| `GET /sessions/{id}/approvals` | 按中断 ID 返回工具、参数和参数指纹 |
+| `POST /sessions/{id}/resume` | JSON `{"decisions":{"中断ID":"approve"}}`；可用 `reject`，必须覆盖全部待审批项；返回 202 |
+
+在已配置相同 HTTP 令牌的终端中提交任务并轮询：
 
 ```powershell
 $base = 'http://127.0.0.1:8766'
 $headers = @{ Authorization = "Bearer $env:WORKSTATION_AGENT_HTTP_TOKEN" }
-$body = @{ task = '读取 .python-version，回答需要的 Python 版本'; session_id = 'demo' } |
-    ConvertTo-Json
+$body = @{ task = '读取 .python-version'; session_id = 'demo' } | ConvertTo-Json
 $run = Invoke-RestMethod "$base/runs" -Method Post -Headers $headers `
     -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
 Invoke-RestMethod "$base/runs/$($run.id)" -Headers $headers
 ```
 
-提交成功返回 HTTP 202，以及应用实际创建的 `id` 和 `session_id`。
-客户端随后轮询任务地址；任务完成时返回 `status: completed`、`answer` 和执行步骤摘要。
-`node` 表示最近完成的框架节点，`task_status` 是已有的任务状态栏。
-活动任务的 `status` 为 `thinking`；详细进度通过 `node` 和 `task_status` 查看。
-节点名称不是实时工具状态，也不是模型逐 Token 输出。
+返回真实的 `id` 和 `session_id`。`status` 表示运行状态，`answer` 是最终答复，
+`node` 是最近完成的图节点，`task_status` 是 [任务状态栏](context.md#任务状态栏)。
+活动运行的状态为 `thinking`，节点更新不代表逐 Token 输出；任务完成仍需检查答复和验收条件。
 
-程序运行结束不等于任务要求已经满足。客户端需要结合答复、步骤和任务状态栏判断结果。
-请求提交成功后，即使客户端断开，任务也会继续执行；需要停止时调用取消接口。
-网络中断后重试提交可能创建新任务，当前没有请求去重协议，应先查询运行记录再决定是否重试。
+服务一次执行一个任务；忙碌时提交、恢复或查询审批返回 409，不排队，运行查询仍可用。
+`waiting_approval` 时，核对工具和参数后提交全部审批决定。
+恢复沿用原 Run ID、调用预算和截止时间；等待审批不能用取消接口终止，应提交拒绝决定。
+恢复的步骤仅包含本次继续执行部分。超时与取消规则见 [Agent 使用](agent.md#取消与超时)。
 
-| 方法和路径 | 用途与结果 |
+提交成功后客户端断开不会取消运行。重试提交可能创建新任务，当前没有请求去重协议。
+`task` 最多 32000 字符；`constraints`、`criteria` 各最多 32 条，每条 1–2000 字符。
+
+## 会话与消息接口
+
+会话 ID 允许 1–128 个字母、数字、下划线或连字符。服务按可信用户、工作区和项目隔离数据。
+会话返回 `id`、`title`、`revision`、`created_at` 和 `updated_at`。
+
+| 方法与路径 | 请求与结果 |
 | --- | --- |
-| `GET /health` | 无需令牌，返回不含配置和工作区路径的服务状态 |
-| `POST /runs` | 提交 `task`，可选 `session_id`、`constraints`、`criteria`、`new_task`；返回 202 |
-| `GET /runs` | 列出当前进程保留的运行记录，按最近更新时间排序 |
-| `GET /runs/{run_id}` | 查看指定运行，不存在时返回 404 |
-| `POST /runs/{run_id}/cancel` | 请求取消活动运行，返回 202；已结束时返回 200 和 `cancel_requested: false` |
-| `GET /sessions/{session_id}/approvals` | 从检查点读取待审批项，按中断 ID 返回工具、参数和参数指纹 |
-| `POST /sessions/{session_id}/resume` | 提交覆盖全部待审批项的 `decisions`，接受后返回 202，继续沿用原 Run ID |
+| `POST /sessions` | JSON `{"title":"调试项目"}`；标题可省略，默认“新会话”；返回 201 |
+| `GET /sessions` | 按更新时间倒序分页，时间相同按 ID 排序 |
+| `GET /sessions/{id}` | 会话详情 |
+| `PATCH /sessions/{id}` | JSON `{"title":"新标题","revision":0}`；返回更新后的会话 |
+| `DELETE /sessions/{id}?revision=0` | 删除会话、全部文本和检查点；返回被删除的 ID |
+| `POST /sessions/{id}/messages` | JSON `{"content":"背景说明","revision":0}`；只保存用户文本，返回 201 |
+| `GET /sessions/{id}/messages` | 按消息位置升序分页 |
+| `GET /sessions/{id}/messages/{message_id}` | 消息详情，检查所属会话 |
+| `PATCH /sessions/{id}/messages/{message_id}` | JSON `{"content":"改写的问题","revision":2}`；只允许编辑用户消息 |
+| `DELETE /sessions/{id}/messages/{message_id}?revision=2` | 删除该消息及后续消息；返回 ID 和 `following_messages_deleted:true` |
 
-服务一次执行一个任务，执行期间提交或恢复其他任务返回 409，不会排队。
-运行期间查询审批同样返回 409，避免读取尚未稳定的检查点；运行查询始终可用。
-同一个会话有待审批操作时，不能提交新任务覆盖它。
-自动生成的会话 ID 会在提交响应中返回；手工指定的会话 ID 允许 1–128 个字母、数字、下划线和连字符。
-任务正文最多 32000 个字符，单个请求正文最多 65536 字节；超出字节上限返回 413。
+标题为 1–200 字符，文本为 1–32000 字符，均不能只含空白。写入不接受角色字段，助手答复只能由 Agent 保存。
+消息包含 `id`、`session_id`、`position`、`role`、`content`、`run_id` 和创建/更新时间。
+`position` 只保证排序，删除后不重编号；单独新增的文本没有运行 ID。
+列表不包含工具原文、模型内部消息或上下文摘要。
 
-## 审批和恢复
+两种列表均接受 `limit=1..100`（默认 50）、`offset=0..100000`（默认 0）。
+结果为 `{"items":[...],"next_offset":50}`，末页为 `null`。
+并发写入会改变分页内容，重新从第一页读取可获得当前排序。
 
-任务返回 `waiting_approval` 后，用响应中的会话 ID 查询审批。
-用户核对工具和参数后，对每个中断 ID 提交 `approve` 或 `reject`：
+### 修改与删除规则
 
-```powershell
-$pending = Invoke-RestMethod "$base/sessions/demo/approvals" -Headers $headers
-$decisions = @{}
-# 本例拒绝全部待审批项；确认实际工具和参数后，可将对应项改成 approve。
-$pending.PSObject.Properties | ForEach-Object { $decisions[$_.Name] = 'reject' }
-$body = @{ decisions = $decisions } | ConvertTo-Json
-Invoke-RestMethod "$base/sessions/demo/resume" -Method Post -Headers $headers `
-    -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
-```
+- 新会话版本为 0；消息或标题变更会增加 `revision`。修改前读取会话并传回该版本，冲突返回 409 和 `revision_conflict`，应重新读取后再决定如何修改。
+- 编辑用户消息会删除其后全部消息；删除消息会连同其后消息一起删除。助手消息不能编辑，返回 `message_read_only`。
+- 历史变更会清除整个会话检查点、摘要和任务状态栏；下次运行从保留的用户文本与最终答复重建上下文，不重新执行旧工具调用。
+- 运行中或待审批时，追加、编辑、删除历史及删除会话返回 `session_busy`，重启后仍有效。待审批时可更名；运行期间可读取会话和消息。
+- 删除会话不删除长期记忆、RAG、外部文件、独立 Run 归档或进程内运行记录。CLI `session clear` 另行清除文本和检查点，保留会话元数据。
 
-决定遗漏、重复提交旧审批或当前没有待审批项时返回 409，客户端应重新查询。
-恢复不会重新计时，默认整次任务限时 300 秒，包含审批等待；过期后返回 `limit_reached`。
-待审批任务没有活动执行协程，取消接口对此返回 409；拒绝审批后由原 Agent 流程完成收尾。
-取消仍采用已有的协作机制，已完成的工具副作用不能撤销，详见 [运行控制](run-control.md)。
+### 保存文本与执行任务
 
-## 保留范围和当前限制
+需要 Agent 回答时，直接调用 `POST /runs`。应用自动建立缺失的会话、保存用户消息，完成后保存最终答复；
+审批恢复不重复插入用户消息。**不要先新增同一条消息再提交同一任务，否则会得到两条用户消息。**
 
-会话标题、用户文本和最终答复已保存到 PostgreSQL，重启后仍可通过 [会话与消息 CRUD](conversations.md) 读取。
-消息编辑与删除会清除后续文本及检查点；运行中或等待审批时禁止修改历史。
+消息新增只补充背景；历史编辑不自动运行模型。修改后可显式提交“根据上面修改后的问题继续回答”等新任务。
 
-运行记录只在当前进程内保留，最多 128 条；容量不足时删除最早结束的记录。
-待审批记录不会自动淘汰，全部容量被待审批项占用时，新任务返回 503，恢复已有审批仍然可用。
-这份列表不是任务历史数据库，进程重启后旧 Run ID 查询返回 404。
-等待审批的操作仍保存在官方会话检查点中，可通过会话审批接口查询和恢复；恢复后原 Run ID 会重新出现在运行列表中。
-恢复返回的是本次继续执行的步骤，不拼接完整历史。
-进程异常退出不会自动重放运行中的任务，也不保证外部副作用严格执行一次。
-服务当前使用单进程运行，未提供用户界面、事件订阅、多用户身份或远程部署入口。
+## 错误与保留范围
 
-未认证请求返回 401；非法浏览器来源返回 403；不匹配的 Host 返回 421。
-非 JSON 请求返回 415，错误 JSON、额外字段或非法参数返回 422；错误说明不回显输入值。
-服务关闭访问日志，返回结果及会话持久化均清除已知凭据；通用敏感内容识别仍受现有规则限制。
-同一个服务令牌代表当前本机用户的全部权限，不支持按客户端划分授权。
+| HTTP 状态 | 含义 |
+| --- | --- |
+| 401 / 403 / 421 | 令牌、Origin 或 Host 不符 |
+| 404 | 会话、消息或当前进程的运行不存在 |
+| 409 | 忙碌、审批不符、版本冲突或尝试编辑助手消息 |
+| 413 / 415 / 422 | 正文超过 65536 字节、非 JSON 或参数无效 |
+| 503 | 数据库未配置/暂不可用，或待审批任务占满运行容量 |
 
-## 实现选择与维护
+错误不回显输入、连接串或底层异常，服务关闭访问日志，持久化与响应清除已知凭据。
 
-服务复用已依赖的 Starlette、Uvicorn、Pydantic 和官方 Agent，不新增依赖。
-[Starlette 生命周期接口](https://starlette.dev/lifespan/) 管理应用及 MCP 连接的打开和关闭，
-官方请求正文大小限制处理超限请求，Pydantic 处理输入校验。
-HTTP 路由调用 `application/agent_service.py` 的任务用例及 `application/conversations.py` 的会话用例，
-通用请求契约位于 `api/`，工具和存储副作用仍经过原 `ToolExecutor`。
+会话文本和检查点保存到 PostgreSQL。运行列表仅在进程内最多保留 128 条，容量不足时淘汰最早结束的记录，
+待审批记录不会自动淘汰。重启后旧 Run ID 查询返回 404；待审批项仍可按会话恢复，原 ID 随之重新出现。
 
-官方 Agent 已提供任务执行、审批恢复与取消，尚不负责本项目 HTTP 请求对应的活动任务句柄和限量查询记录。
-因此自定义范围仅为一个 `asyncio.Task` 的保留、进度副本和 HTTP 数据转换；没有自行实现模型循环、检查点或持久任务队列。
-维护成本集中在请求取消、服务关闭、审批恢复回调和内存记录淘汰；升级框架时需要重跑对应回归。
-
-新增回归位于 `tests/integration/test_agent_http.py`，覆盖请求校验、来源与令牌、审批拒绝、
-PostgreSQL 重启恢复、忙碌拒绝、超时及取消收尾。
-`tests/integration/test_framework_agent.py` 额外启动真实 Agent HTTP 进程，经官方模型 SDK 的本机接口夹具和独立 MCP 服务完成读取。
-这些回归验证本次服务实现，不调用外部模型，也不代表外部模型质量验收。
+历史修改与截断在一个业务事务中完成；检查点由官方组件使用另一连接删除。
+程序持有会话锁，先清除检查点再保存文本，写入失败时保留原文本供下次重建。
+进程崩溃不保证答复与文本同时落库，也不会自动重放任务或撤销已发生的操作。
+旧检查点不会整体导入消息表，只从首次新运行或审批恢复开始记录本次任务文本。
+当前没有前端、事件订阅、多用户认证或远程部署入口。
