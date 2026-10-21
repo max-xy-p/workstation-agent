@@ -53,6 +53,5 @@ class RagConfigTests(unittest.TestCase):
         ):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 RagSettings(**values)
-        settings = Settings(Path.cwd(), data_dir=Path.cwd().parent / "outside")
         with self.assertRaises(ValueError):
-            _ = settings.rag_database_path
+            Settings(Path.cwd(), database_url="sqlite:///outside.db")

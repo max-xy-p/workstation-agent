@@ -24,8 +24,10 @@ class Settings:
     max_steps: int = 8
     # 使用的模型名称，运行模型任务前需要配置。
     model: str | None = None
-    # 保存任务和步骤记录的 agent.db 存放目录；默认入口不启用保存。
-    data_dir: Path | None = None
+    # PostgreSQL 连接串包含凭据，不能打印或记录原文。
+    database_url: str | None = field(
+        default_factory=lambda: os.getenv("WORKSTATION_AGENT_DATABASE_URL") or None, repr=False
+    )
     # 单次工具输出的字符上限，包含截断标记。
     tool_output_chars: int = 50_000
 
@@ -55,22 +57,6 @@ class Settings:
     context: ContextSettings = field(default_factory=ContextSettings)
 
     @property
-    def memory_database_path(self) -> Path:
-        """记忆与会话数据库必须位于工作区内。"""
-        return self._memory_path("memory.db")
-
-    @property
-    def session_database_path(self) -> Path:
-        """框架会话与长期记忆分库保存，独立管理迁移。"""
-        return self._memory_path("sessions.db")
-
-    def _memory_path(self, name):
-        path = self.database_path.with_name(name).resolve()
-        if not path.is_relative_to(self.workspace.resolve()):
-            raise ValueError("记忆数据目录必须位于工作区内")
-        return path
-
-    @property
     def memory_access(self):
         """身份来自配置而非模型参数，工作区标识使用规范化路径。"""
         import hashlib
@@ -85,15 +71,12 @@ class Settings:
             project_id=self.memory.project_id,
         )
 
-    @property
-    def rag_database_path(self) -> Path:
-        """RAG 索引路径必须解析到工作区内。"""
-        path = self.database_path.with_name("rag.db").resolve()
-        if not path.is_relative_to(self.workspace.resolve()):
-            raise ValueError("RAG 数据目录必须位于工作区内")
-        return path
-
     def __post_init__(self) -> None:
+        if self.database_url is not None:
+            database = urlparse(self.database_url)
+            if (database.scheme not in {"postgresql", "postgres"} or not database.hostname
+                    or not database.path.strip("/") or database.fragment):
+                raise ValueError("WORKSTATION_AGENT_DATABASE_URL 必须为 PostgreSQL 数据库连接地址")
         endpoint = urlparse(self.model_base_url)
         if (
             endpoint.scheme not in {"http", "https"}
@@ -133,11 +116,6 @@ class Settings:
         """返回本机 Agent HTTP 服务地址。"""
         return f"http://127.0.0.1:{self.agent_service_port}"
 
-    @property
-    def database_path(self) -> Path:
-        """返回 agent.db 的完整路径。"""
-        return (self.data_dir or self.workspace / ".workstation-agent") / "agent.db"
-
     @classmethod
     def from_env(cls) -> Settings:
         """从环境变量读取并校验配置。"""
@@ -151,8 +129,6 @@ class Settings:
             raise ValueError("WORKSTATION_AGENT_MAX_STEPS must be at least 1")
 
         model = os.getenv("WORKSTATION_AGENT_MODEL") or None
-        raw_data_dir = os.getenv("WORKSTATION_AGENT_DATA_DIR")
-        data_dir = Path(raw_data_dir).resolve() if raw_data_dir else None
         try:
             tool_output_chars = int(os.getenv("WORKSTATION_AGENT_TOOL_OUTPUT_CHARS", "50000"))
         except ValueError as exc:
@@ -177,7 +153,7 @@ class Settings:
             workspace=workspace,
             max_steps=max_steps,
             model=model,
-            data_dir=data_dir,
+            database_url=os.getenv("WORKSTATION_AGENT_DATABASE_URL") or None,
             tool_output_chars=tool_output_chars,
             api_key=os.getenv("WORKSTATION_AGENT_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
             model_base_url=os.getenv("WORKSTATION_AGENT_BASE_URL", "https://api.openai.com/v1"),

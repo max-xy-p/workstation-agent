@@ -60,9 +60,9 @@ Step 不保存工具原始参数或输出，避免默认审计泄漏内容。最
 - 底层图递归限制为中间件留出执行余量；业务调用次数仍由官方中间件限制。
 - 模型客户端重试次数为 0，图不自动重试工具副作用。
 
-默认每次任务独立；--session 或 SESSIONS_ENABLED 可启用官方 SQLite Checkpointer 跨任务续聊，支持工具审批恢复。
+默认每次任务独立；--session 或 SESSIONS_ENABLED 可启用官方 PostgreSQL Checkpointer 跨任务续聊，支持工具审批恢复。
 可通过 `AgentApplication(repository=...)` 显式保存业务 Run；默认入口不保存任务、消息或答复。
-SQLite RunRepository 的 round-trip 和显式保存测试保留，但它不是 LangGraph Checkpointer。
+PostgreSQL RunRepository 的 round-trip 和显式保存测试保留，但它不是 LangGraph Checkpointer。
 Memory 已通过受控查询门面装配到 ContextBuilder，动态内容按次注入模型请求，不持久化到会话历史。
 RAG 已通过默认 search_documents 工具接入，证据使用 Context 模块统一格式。
 先通过 CLI 摄取文档，再由单 Agent 按证据决定后续查询，详见 [RAG 文档](rag.md)。

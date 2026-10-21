@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -10,6 +11,7 @@ from pydantic import JsonValue
 
 from .application import AgentApplication, ToolApplication
 from .application.memory import MemoryApplication
+from .application.sessions import SessionApplication
 from .config import Settings
 from .memory.models import MemoryRecord
 from .memory.service import MemoryService
@@ -19,8 +21,11 @@ from .rag.index import IndexSnapshot
 from .retrieval.strategy import RetrievalStrategy
 from .safety import AllowSafeReadsPolicy
 from .safety.permissions import PermissionLevel
-from .storage import SQLiteRunRepository
+from .storage import PostgresDatabase, PostgresRunRepository
 from .tools import ToolExecutor, ToolRegistry, default_tools
+
+if TYPE_CHECKING:
+    from .application.database import DatabaseApplication
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +33,21 @@ class Infrastructure:
     """保存工具目录和任务存储对象。"""
 
     tools: ToolRegistry
-    runs: SQLiteRunRepository
+    runs: PostgresRunRepository
+
+
+def database_for(settings: Settings) -> PostgresDatabase:
+    """按可信工作区身份组装 PostgreSQL 存储，构造时不连接数据库。"""
+    return PostgresDatabase(settings.database_url, settings.memory_access.workspace_id)
+
+
+def build_database_application(settings: Settings) -> "DatabaseApplication":
+    """组装显式初始化与检查用例，构造时不连接 PostgreSQL。"""
+    from .application.database import DatabaseApplication
+    from .storage.postgres.checkpoints import PostgresSessionBackend
+
+    database = database_for(settings)
+    return DatabaseApplication(database, PostgresSessionBackend(database))
 
 
 class RagApprovalPolicy(AllowSafeReadsPolicy):
@@ -108,17 +127,16 @@ def _memory_service(
     settings: Settings, retrieval: RetrievalStrategy[MemoryRecord] | None = None
 ) -> MemoryService:
     from .memory.retrieval import MemoryRetrievalStrategy
-    from .storage.sqlite.memory import SQLiteMemoryRepository
+    from .storage.postgres.memory import PostgresMemoryRepository
 
     return MemoryService(
-        SQLiteMemoryRepository(
-            settings.memory_database_path,
-            settings.workspace,
+        PostgresMemoryRepository(
+            database_for(settings),
             max_records=settings.memory.max_records,
         ),
         retrieval=retrieval if retrieval is not None else MemoryRetrievalStrategy(),
         max_records=settings.memory.max_records,
-        secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
+        secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
     )
 
 
@@ -148,17 +166,16 @@ def build_memory_application(
     )
 
 
-def build_session_application(settings, *, approve_delete=False):
+def build_session_application(settings: Settings, *, approve_delete: bool = False) -> SessionApplication:
     """仅组装会话清除入口，不在构造时打开数据库。"""
     from .application.sessions import SessionApplication
-    from .storage.sqlite.sessions import SQLiteSessionBackend
+    from .storage.postgres.checkpoints import PostgresSessionBackend
     from .tools.checkpoints import AuthorizedCheckpointer
 
     saver = AuthorizedCheckpointer(
-        SQLiteSessionBackend(
-            settings.session_database_path,
-            settings.workspace,
-            secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
+        PostgresSessionBackend(
+            database_for(settings),
+            secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
         ),
         settings.memory_access,
         MemoryApprovalPolicy(delete=approve_delete),
@@ -167,10 +184,12 @@ def build_session_application(settings, *, approve_delete=False):
 
 
 def build_infrastructure(settings: Settings) -> Infrastructure:
-    """创建工具目录和 SQLite 任务存储。"""
+    """创建工具目录和 PostgreSQL 任务存储，不打开数据库连接。"""
     return Infrastructure(
         tools=default_tools(settings.workspace, max_output_chars=settings.tool_output_chars),
-        runs=SQLiteRunRepository(settings.database_path),
+        runs=PostgresRunRepository(database_for(settings), secrets=(
+            settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url,
+        )),
     )
 
 
@@ -189,7 +208,7 @@ def build_tool_application(
     from .application.rag import RagApplication
     from .rag.chunking.structured import StructuredChunkingStrategy
     from .rag.retriever import KnowledgeRetrievalStrategy
-    from .storage.sqlite.rag import SQLiteIndexRepository
+    from .storage.postgres.rag import PostgresIndexRepository
     from .tools.builtin.rag import (
         AuthorizedBackend,
         DeleteDocumentTool,
@@ -214,9 +233,8 @@ def build_tool_application(
         )
         backend = AuthorizedBackend(rag_backend, internal)
     rag = RagApplication(
-        SQLiteIndexRepository(
-            settings.rag_database_path,
-            workspace=settings.workspace,
+        PostgresIndexRepository(
+            database_for(settings),
             max_chunks=settings.rag.max_chunks,
         ),
         settings.rag,
@@ -328,14 +346,13 @@ async def build_agent_application(
     )
     checkpointer = None
     if settings.memory.sessions or persist_session:
-        from .storage.sqlite.sessions import SQLiteSessionBackend
+        from .storage.postgres.checkpoints import PostgresSessionBackend
         from .tools.checkpoints import AuthorizedCheckpointer
 
         checkpointer = AuthorizedCheckpointer(
-            SQLiteSessionBackend(
-                settings.session_database_path,
-                settings.workspace,
-                secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
+            PostgresSessionBackend(
+                database_for(settings),
+                secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
             ),
             settings.memory_access,
             policy,

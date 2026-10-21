@@ -3,6 +3,10 @@
 基于 **LangChain + LangGraph** 的单 Agent 项目，按模块提供真实入口、完整调用链和中文教学文档。
 0.2.0 已移除旧手写 Agent 循环和兼容 API。
 
+持久化统一使用 PostgreSQL。运行 Agent 或记忆、知识库命令前，先按
+[数据库部署说明](docs/database.md) 配置 `WORKSTATION_AGENT_DATABASE_URL`，执行 `init-db` 和
+`doctor --database`。旧 SQLite 文件不会自动导入或删除，重建方式见该文档。
+
 ## 运行 Agent
 
 配置支持工具调用的 OpenAI 兼容模型，在仓库根目录的 PowerShell 7 运行：

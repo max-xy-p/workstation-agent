@@ -1,7 +1,7 @@
 # 记忆系统设计
 
 > 日期：2026-10-15。状态：方案已确认，已交付实现；实际范围与限制见 [记忆使用与验收](memory.md)。
-> 已确认：长期记忆采用自然语言正文＋必要管理元数据，SQLite 正文使用 TEXT。
+> 已确认：长期记忆采用自然语言正文＋必要管理元数据，PostgreSQL 正文使用 TEXT。
 > 本文记录目标设计；当前能力以 [功能模块清单](modules.md) 为准。
 
 ## 1. 目标与范围
@@ -18,10 +18,10 @@
 | 组成 | 职责 | 边界 |
 | --- | --- | --- |
 | 会话状态 | 稳定会话 ID、历史恢复、裁剪与摘要 | agent/ 组合官方能力；不自建消息协议，不用 RunRepository 代替 Checkpointer |
-| 长期记忆管理 | 增删改查、来源、范围、去重、冲突与过期规则 | memory/ 依赖 Repository 协议，不直接访问 SQLite、文件或网络 |
+| 长期记忆管理 | 增删改查、来源、范围、去重、冲突与过期规则 | memory/ 依赖 Repository 协议，不直接访问 PostgreSQL、文件或网络 |
 | 记忆提取 | 从新增对话和已验证结果生成新增、补充或替代建议 | 只产生候选，不拥有直接落库或扩大权限的能力 |
 | 上下文组装 | 相关性检索、预算、数据标记、实际来源记录 | context/ 是 Memory/RAG 进入 Prompt 的唯一组装入口 |
-| 持久化与索引 | SQLite、事务、版本校验、索引更新和 migration | storage/ 实现协议；索引可重建，正文是唯一内容事实源 |
+| 持久化与索引 | PostgreSQL、事务、版本校验、索引更新和 migration | storage/ 实现协议；索引可重建，正文是唯一内容事实源 |
 
 application/ 提供管理用例、协调运行与提取，并传递可信的用户、工作区和项目标识；
 CLI、MCP 和后续界面只调用这些用例。domain/ 不依赖框架或基础设施。
@@ -49,7 +49,7 @@ Session 对应多个 Run 和框架消息；候选根据来源指向消息或 Run
 一条记忆可以关联多个来源，一个会话也可以产生多条记忆；长期记忆不归属于 RAG 文档。
 来源引用失效时不臆造证据，也不把原始会话删除默认解释为长期记忆删除。
 
-SQLite 将 content 保存为 TEXT，常用过滤字段设列，来源可采用关联表或 JSON 元数据。
+PostgreSQL 将 content 保存为 TEXT，常用过滤字段设列，来源可采用关联表或 JSON 元数据。
 不维护独立、可分别编辑的事实卡片和检索描述。更新通过预期 version 校验及事务提交；
 正文与持久化索引保持一致，派生缓存失效后重建，读取时核验记录仍有效。
 
@@ -105,23 +105,19 @@ SQLite 将 content 保存为 TEXT，常用过滤字段设列，来源可采用�
 
 | 能力 | 选择与理由 |
 | --- | --- |
-| 会话和摘要 | 复用 [AgentState、Checkpointer 与官方摘要能力](https://docs.langchain.com/oss/python/langchain/short-term-memory)，本机采用官方 SQLite Checkpointer |
+| 会话和摘要 | 复用 [AgentState、Checkpointer 与官方摘要能力](https://docs.langchain.com/oss/python/langchain/short-term-memory)，本机采用官方 PostgreSQL Checkpointer |
 | 记忆提取 | 后续优先评估 [LangMem 的无存储依赖核心 API](https://langchain-ai.github.io/langmem/concepts/conceptual_guide/)，输出候选后走本项目受控提交 |
 | 存储和检索 | 优先复用 [Store 官方接口](https://docs.langchain.com/oss/python/langchain/long-term-memory)及成熟检索组件，通过适配器满足现有 Repository 协议 |
 | 项目扩展 | 作用域授权、来源验证、冲突提交、遗忘和预算属于项目业务规则，保留最小自定义实现 |
 
-当前 [Store 集成列表](https://docs.langchain.com/oss/python/integrations/long-term-memory)未列出 SQLite 长期 Store；
-Checkpointer 的 SQLite 支持不能当作长期 Store 支持。
-实现前先验证适配组件；仅在确有缺口时编写 SQLite 持久化适配，不重写框架检索算法，
-也不额外维护一套与 Repository 平行的数据源。自定义适配需维护事务、migration、索引一致性和框架兼容。
-
-会话阶段新增官方 SQLite Checkpointer 依赖，用于本机恢复，替代方案是额外部署数据库服务；
-自动提取阶段再评估 LangMem，成本是依赖维护及额外模型请求。第一阶段不要求这些依赖，
-也不强制外部 embedding。中文召回方式、语义阈值与条数需通过样本验收，不能沿用空格分词后无关记录也入选的规则。
+持久化统一使用 PostgreSQL。官方 PostgresSaver 负责会话检查点；业务记忆通过现有 Repository
+协议保存，以满足整批版本校验、遗忘保护和容量约束。数据库驱动及连接池采用 Psycopg，
+不自行实现官方检查点或通用 Store。部署和维护边界见 [数据库说明](database.md)。
+自动提取复用 LangMem，成本仍是依赖维护和额外模型请求；中文检索继续复用既有策略。
 
 ## 7. 实施顺序与验收
 
-1. 长期记忆闭环：调整模型与 Protocol、先补作用域/无关召回回归测试，再交付 SQLite、授权 CRUD、
+1. 长期记忆闭环：调整模型与 Protocol、先补作用域/无关召回回归测试，再交付 PostgreSQL、授权 CRUD、
    管理入口和 Context 接入；覆盖重启可用、越权拒绝、更新冲突、过期及删除。
 2. 会话能力：稳定会话 ID、官方 Checkpointer、摘要与清除入口；验证续聊、隔离、
    敏感数据保留策略和动态上下文不重复持久化。与 Memory 分开交付。

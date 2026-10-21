@@ -134,7 +134,6 @@ class FrameworkAgentIntegrationTests(unittest.TestCase):
         environment = {
             **self.env, "WORKSTATION_AGENT_HTTP_PORT": str(port),
             "WORKSTATION_AGENT_HTTP_TOKEN": token,
-            "WORKSTATION_AGENT_DATA_DIR": str(self.workspace / "http-state"),
         }
         with TemporaryFile() as output:
             process = subprocess.Popen(

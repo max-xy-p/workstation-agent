@@ -19,7 +19,7 @@ PDF、Word、网页摄取及 OCR 留待后续扩展；初期不引入独立 RAG 
 | --- | --- | --- |
 | LangChain Document | 原文 page_content、稳定 id、metadata 中的来源位置和派生上下文 | 更多来源格式 |
 | SourceDocument / IndexSnapshot | 来源身份、原生框架文档及按块 ID 关联的向量 | 更大规模的快照与索引 |
-| IndexRepository | 同快照读取、原子发布、按来源删除；SQLite 格式 3 | 大规模索引基础设施 |
+| IndexRepository | 同快照读取、原子发布、按来源删除；PostgreSQL 格式 3 | 大规模索引基础设施 |
 | HybridSearch | 官方检索组合，直接输入输出 Document；BM25Plus、向量、RRF 和重排 | 真实语料和模型效果验收 |
 | ContextBuilder | 官方 Runnable 接口、原文证据、完整预算和实际来源记录 | 精确 tokenizer 预算 |
 | CLI / MCP / Agent | 摄取、删除、查询与健康检查，共享授权用例 | 更多格式和交互入口 |
@@ -299,7 +299,7 @@ uv run workstation-agent doctor
 - 新增文本分块、经典检索、Markdown 解析及 BM25 依赖，uv.lock 固定版本；安装与运行成本见 rag.md。
 - 破坏性调整内部对象、Context 和仓库接口，不保留旧入口或转换链；旧索引只标记来源并要求从原文重建。
 - 原文位置采用 Python 字符半开区间及一基行号；派生前缀和辅助格式独立保存。
-- SQLite 原子发布 SourceDocument、原生 Document 及按块 ID 关联的向量，移除重复词频；migration 003 标记格式 3。
+- PostgreSQL 原子发布 SourceDocument、原生 Document 及按块 ID 关联的向量，移除重复词频；数据沿用快照格式 3，数据库表由迁移 005 创建。
 - 中文初始采用单字 / 双字滑窗，向量采用精确余弦扫描，适用于当前小型知识库。
 - 模型复用官方 LangChain OpenAI 兼容集成，由配置提供名称，不绑定实际供应商。
 - 默认结构前缀 + BM25，配置模型并授权出站后启用生成前缀、混合召回和重排。

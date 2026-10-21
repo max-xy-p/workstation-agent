@@ -4,16 +4,20 @@
 
 - Python 3.13+
 - `uv`
+- PostgreSQL；部署及专用测试数据库配置见 [数据库说明](database.md)
 - 运行框架：LangGraph；参数/结果校验：Pydantic；本机服务：MCP SDK、Starlette、Uvicorn
 - Windows 后台启动脚本需要 PowerShell 7；详见 [本机服务](local-service.md)
 - 依赖及其传递版本由 `uv.lock` 固定，入口和验收见 [工具模块](tools.md)
 
 初始化：
 
+先按 [数据库说明](database.md) 配置 `WORKSTATION_AGENT_DATABASE_URL`，然后运行：
+
 ```powershell
 uv sync
 uv run workstation-agent init-db
 uv run workstation-agent doctor
+uv run workstation-agent doctor --database
 ```
 
 测试与构建：
@@ -108,7 +112,7 @@ uv run python -m unittest tests.integration.test_agent_http -v
 1. 先在对应核心模块定义 Protocol；
 2. 在 `storage/` 中实现；
 3. SQL 变更使用新的递增 migration，禁止修改已发布 migration 的语义；
-4. 使用领域对象作为输入输出，不向核心层返回 `sqlite3.Row`；
+4. 使用领域对象作为输入输出，不向核心层返回 数据库行对象；
 5. 增加至少一个保存/恢复往返测试；
 6. 验证 migration 文件被包含进 Wheel。
 

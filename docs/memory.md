@@ -5,8 +5,9 @@
 
 ## 长期记忆
 
-每条记忆是自然语言正文加作用域、来源、版本和有效期。SQLite 的 TEXT 列是正文唯一事实源；
+每条记忆是自然语言正文加作用域、来源、版本和有效期。PostgreSQL 的 TEXT 列是正文唯一事实源；
 偏好、项目决策和经验不分卡片格式。下面的命令不需要配置聊天模型。
+运行前先按 [数据库说明](database.md) 配置 PostgreSQL 并执行初始化。
 
 ~~~powershell
 $env:WORKSTATION_AGENT_PROJECT_ID = 'workstation-agent'
@@ -67,8 +68,8 @@ uv run workstation-agent session clear project-chat --approve-delete
 会话 ID 只接受 1–128 位字母、数字、下划线或连字符。
 框架 thread_id 由可信身份、当前范围和会话 ID 一起派生，其他项目不能读取或清除同名会话。
 
-使用官方 SqliteSaver，业务 RunRepository 不承担恢复能力。运行与清除通过本机文件锁互斥，
-同一会话跨进程忙碌时拒绝操作；锁文件只有占位字节，不含消息正文。
+使用官方 PostgresSaver，业务 RunRepository 不承担恢复能力。运行与清除通过 PostgreSQL 会话锁互斥，
+同一会话跨进程忙碌时拒绝操作；锁句柄不保存消息正文，持有锁的连接关闭时自动释放。
 无论是否保存会话，都执行统一请求预算与官方裁剪。仅当 CONTEXT_SUMMARIZE=true
 且 MEMORY_ALLOW_REMOTE=true 时尝试官方摘要；每次运行最多一次。详见 [上下文管理](context.md)。工具审批通过官方检查点恢复，命令和限制见 [运行控制](run-control.md)。失败的普通运行不能用旧审批重新启动。
 
@@ -110,7 +111,7 @@ Run 的 memory_extraction 步骤单独返回 saved/pending 或安全错误码。
 它不清除原始会话或外部备份。需要清除对话时另外执行 session clear；清除会话也不会删除长期记忆。
 模型先前答复可能已复述事实，需一并清除相应会话才能避免从历史重新获得。
 新消息再次表达同一事实仍可形成新记忆，不承诺识别所有同义改写。
-SQLite 空闲页、备份及已出站内容不属于应用层删除的物理擦除保证。
+PostgreSQL 空闲页、备份及已出站内容不属于应用层删除的物理擦除保证。
 
 ## 配置
 
@@ -130,25 +131,20 @@ SQLite 空闲页、备份及已出站内容不属于应用层删除的物理擦�
 | MEMORY_EXTRACT_CHARS | 6000 | 当前用户消息与已有记忆正文的提取预算 |
 | MEMORY_EXTRACT_LIMIT | 5 | 单批候选上限，最大 20 |
 | MEMORY_EXTRACT_CALLS | 3 | 单批模型请求上限，最大 8；没有自动网络重试 |
-| DATA_DIR | 工作区下 .workstation-agent | memory.db 与 sessions.db 所在目录，必须位于工作区内 |
+| DATABASE_URL | 未配置 | PostgreSQL 数据库连接串，凭据不打印；配置见 [数据库说明](database.md) |
 
 EXTRACT_CHARS 约束文本内容，不代表包含框架 schema 和提示词后的精确 token 预算。
-doctor 打印开关、预算、路径及依赖版本；--memory 额外只读检查记录可访问性。
+doctor 打印开关、预算、连接是否配置及依赖版本；--memory 额外只读检查记录可访问性。
 开启自动提取却缺少出站授权或模型配置时诊断失败，不发送探测请求。
 
 ## 存储与验收
 
-`004_memory.sql` 是创建长期记忆相关数据库表的迁移脚本。
-首次通过权限检查、向记忆数据库写入数据时，程序会自动执行该脚本；已有的表不会重复创建。
-当前没有默认旧长期记忆数据库需要迁移；
-旧内存对象和导出已移除，调用方须使用受控应用入口。未来格式变化继续使用版本化 migration。
-sessions.db 的表由官方 Checkpointer 管理，升级需同时验收框架版本及应用的隐私序列化器。
+`005_postgresql.sql` 创建 PostgreSQL 业务表，首次授权写入时自动检查迁移。
+检查点表由官方 PostgresSaver 管理；旧数据库的重建方式见 [数据库说明](database.md)。
 
-SQLite 长期适配是本机持久化的能力缺口：官方 Store 集成未列出 SQLite，
-引入额外数据库服务成本不合适，因此保留最小 Repository 适配，不实现通用 Store 克隆。
-共享检索组件由现有 RAG 的纯 BM25 扩展提取，两类数据、数据库和访问规则继续独立。
-新增运行依赖为官方 SQLite Checkpointer 与 LangMem；LangMem 带入其上游依赖，
-只在配置自动提取/摘要时加载相应模型适配。
+记忆适配保留项目要求的批次版本检查、遗忘保护和条数预算，数据库驱动与连接池使用官方 Psycopg，
+检查点使用官方组件。没有另外实现通用 Store 或检索算法。
+升级框架时必须验证迁移、权限包装器与隐私序列化器；LangMem 仍只在需要时接入模型处理。
 
 验收包括作用域/无关召回回归、重启 CRUD、版本冲突、事务回滚、水位、过期、秘密拒绝、
 真实 CLI、官方检查点续聊、会话清除、瞬时注入、真实 LangMem 离线协议及提取失败保留主结果。

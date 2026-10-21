@@ -50,7 +50,7 @@ class RunRepository(Protocol):
 
 
 class SessionCheckpointer(Protocol):
-    """应用只需要身份配置和会话互斥，不依赖 SQLite 或其他存储实现。"""
+    """应用只需要身份配置和会话互斥，不依赖具体数据库实现。"""
 
     def config(self, session_id: str) -> RunnableConfig: ...
     def lease(

@@ -1,4 +1,4 @@
-"""验证 RAG 文件、SQLite、权限及真实 CLI 边界。"""
+"""验证 RAG 文件、PostgreSQL、权限及真实 CLI 边界。"""
 
 import json
 import os
@@ -9,8 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.postgres_support import has_rag
 from tests.unit.test_rag import FakeBackend
-from workstation_agent.bootstrap import build_tool_application
+from workstation_agent.bootstrap import build_tool_application, database_for
 from workstation_agent.config import Settings
 from workstation_agent.rag.config import RagSettings
 
@@ -40,11 +41,11 @@ class RagIntegrationTests(unittest.TestCase):
         self.assertEqual(
             self.call(app, "search_documents", {"query": "权限"})["status"], "no_evidence"
         )
-        self.assertFalse(self.settings.rag_database_path.exists())
+        self.assertFalse(has_rag(self.settings))
         denied = app.execute_tool("delete_document", {"path": "guide.md"})
         self.assertEqual(denied.error_code, "permission_required")
 
-    def test_sqlite_restart_update_delete_and_original_citations(self):
+    def test_postgres_restart_update_delete_and_original_citations(self):
         self.call(
             self.application(True),
             "ingest_document",
@@ -95,7 +96,7 @@ class RagIntegrationTests(unittest.TestCase):
             limited.execute_tool("ingest_document", {"path": "guide.md"}).error_code,
             "resource_limit",
         )
-        self.assertFalse(self.settings.rag_database_path.exists())
+        self.assertFalse(has_rag(self.settings))
 
     def test_model_outbound_denial_and_failed_update_do_not_replace_old_version(self):
         rag = RagSettings(embedding_model="fixture")
@@ -104,7 +105,7 @@ class RagIntegrationTests(unittest.TestCase):
             "ingest_document", {"path": "guide.md"}
         )
         self.assertEqual(result.error_code, "permission_required")
-        self.assertFalse(self.settings.rag_database_path.exists())
+        self.assertFalse(has_rag(self.settings))
         configured = replace(configured, rag=replace(rag, allow_remote=True))
         backend = FakeBackend()
         self.call(
@@ -165,15 +166,19 @@ class RagIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 app.execute_tool("search_documents", args).error_code, "invalid_arguments"
             )
-        self.assertFalse(self.settings.rag_database_path.exists())
+        self.assertFalse(has_rag(self.settings))
 
     def test_real_cli_ingest_search_and_write_approval(self):
+        assert self.settings.database_url is not None
         environment = {
             key: value
             for key, value in os.environ.items()
             if not key.startswith("WORKSTATION_AGENT_")
         }
-        environment.update(WORKSTATION_AGENT_WORKSPACE=str(self.root), PYTHONIOENCODING="utf-8")
+        environment.update(
+            WORKSTATION_AGENT_WORKSPACE=str(self.root), PYTHONIOENCODING="utf-8",
+            WORKSTATION_AGENT_DATABASE_URL=self.settings.database_url,
+        )
 
         def cli(*args):
             return subprocess.run(
@@ -194,25 +199,31 @@ class RagIntegrationTests(unittest.TestCase):
         self.assertIn("默认只读", result["context"])
         self.assertEqual(cli("delete", "guide.md", "--approve-write").returncode, 0)
 
-    def test_failed_sqlite_publish_rolls_back_old_document(self):
-        import sqlite3
+    def test_failed_postgres_publish_rolls_back_old_document(self) -> None:
+        from psycopg import sql
 
         self.call(self.application(True), "ingest_document", {"path": "guide.md"})
-        connection = sqlite3.connect(self.settings.rag_database_path)
-        connection.execute(
-            "CREATE TRIGGER reject_update BEFORE UPDATE ON rag_documents "
-            "BEGIN SELECT RAISE(ABORT, 'private-trigger-error'); END;"
-        )
-        connection.commit()
-        connection.close()
-        (self.root / "guide.md").write_text("# 权限\n更改内容", encoding="utf-8")
-        failed = self.application(True).execute_tool("ingest_document", {"path": "guide.md"})
-        self.assertFalse(failed.success)
-        self.assertNotIn("private-trigger-error", failed.content)
-        self.assertIn(
-            "默认只读",
-            self.call(self.application(), "search_documents", {"query": "权限"})["context"],
-        )
+        database = database_for(self.settings)
+        constraint = "reject_update_" + database.workspace_id[:16]
+        with database.connect() as connection:
+            row = connection.execute(
+                "SELECT bundle::text FROM workstation.rag_documents WHERE workspace_id=%s AND source_uri=%s",
+                (database.workspace_id, "guide.md"),
+            ).fetchone()
+            assert row is not None
+            payload = row[0]
+            connection.execute(sql.SQL(
+                "ALTER TABLE workstation.rag_documents ADD CONSTRAINT {} CHECK (workspace_id <> {} OR bundle = {}::jsonb)"
+            ).format(sql.Identifier(constraint), sql.Literal(database.workspace_id), sql.Literal(payload)))
+        try:
+            (self.root / "guide.md").write_text("# 权限\n更改内容", encoding="utf-8")
+            failed = self.application(True).execute_tool("ingest_document", {"path": "guide.md"})
+            self.assertFalse(failed.success)
+            self.assertNotIn(constraint, failed.content)
+            self.assertIn("默认只读", self.call(self.application(), "search_documents", {"query": "权限"})["context"])
+        finally:
+            with database.connect() as connection:
+                connection.execute(sql.SQL("ALTER TABLE workstation.rag_documents DROP CONSTRAINT {}").format(sql.Identifier(constraint)))
 
     def test_index_health_and_reserved_source_filter(self):
         self.assertEqual(self.call(self.application(), "rag_status", {})["status"], "missing")
@@ -233,66 +244,47 @@ class RagIntegrationTests(unittest.TestCase):
             "needs_reindex",
         )
 
-    def test_old_format_is_not_decoded_and_each_source_must_be_rebuilt_or_deleted(self):
-        import sqlite3
-        from importlib.resources import files
-
-        database = self.settings.rag_database_path
-        database.parent.mkdir(parents=True)
-        connection = sqlite3.connect(database)
-        connection.executescript(
-            files("workstation_agent.storage.migrations")
-            .joinpath("002_rag.sql")
-            .read_text(encoding="utf-8")
-        )
-        for source in ("guide.md", "old-other.md"):
-            connection.execute(
-                "INSERT INTO rag_documents(source_uri, document_id, bundle) VALUES (?, ?, ?)",
-                (source, "old-" + source, "not valid JSON and must never be decoded"),
-            )
-        connection.commit()
-        connection.close()
-
+    def test_old_format_is_not_decoded_and_each_source_must_be_rebuilt_or_deleted(self) -> None:
+        database = database_for(self.settings)
+        database.initialize()
+        with database.connect() as connection:
+            for source in ("guide.md", "old-other.md"):
+                connection.execute(
+                    "INSERT INTO workstation.rag_documents VALUES (%s,%s,%s,%s::jsonb,%s)",
+                    (database.workspace_id, source, "old-" + source, '{"legacy":true}', 2),
+                )
         readonly = self.application()
         report = self.call(readonly, "rag_status", {})
         self.assertEqual(report["status"], "needs_reindex")
         self.assertEqual(report["obsolete_sources"], ["guide.md", "old-other.md"])
-        result = readonly.execute_tool("search_documents", {"query": "权限"})
-        self.assertEqual(result.error_code, "index_incompatible")
-        denied = readonly.execute_tool("ingest_document", {"path": "guide.md"})
-        self.assertEqual(denied.error_code, "permission_required")
-        connection = sqlite3.connect(database)
-        self.assertNotIn(
-            "format_version",
-            [row[1] for row in connection.execute("PRAGMA table_info(rag_documents)")],
-        )
-        connection.close()
-
+        self.assertEqual(readonly.execute_tool("search_documents", {"query": "权限"}).error_code, "index_incompatible")
+        self.assertEqual(readonly.execute_tool("ingest_document", {"path": "guide.md"}).error_code, "permission_required")
+        with database.connect() as connection:
+            versions = connection.execute(
+                "SELECT DISTINCT format_version FROM workstation.rag_documents WHERE workspace_id=%s",
+                (database.workspace_id,),
+            ).fetchall()
+        self.assertEqual(versions, [(2,)])
         writable = self.application(True)
         self.call(writable, "ingest_document", {"path": "guide.md"})
-        report = self.call(readonly, "rag_status", {})
-        self.assertEqual(report["obsolete_sources"], ["old-other.md"])
-        result = self.call(
-            readonly, "search_documents", {"query": "权限", "filters": {"source_uri": "guide.md"}}
-        )
+        self.assertEqual(self.call(readonly, "rag_status", {})["obsolete_sources"], ["old-other.md"])
+        result = self.call(readonly, "search_documents", {"query": "权限", "filters": {"source_uri": "guide.md"}})
         self.assertIn("默认只读", result["context"])
-        self.assertEqual(
-            readonly.execute_tool("search_documents", {"query": "权限"}).error_code,
-            "index_incompatible",
-        )
-        connection = sqlite3.connect(database)
-        payload, version = connection.execute(
-            "SELECT bundle, format_version FROM rag_documents WHERE source_uri='guide.md'"
-        ).fetchone()
+        self.assertEqual(readonly.execute_tool("search_documents", {"query": "权限"}).error_code, "index_incompatible")
+        with database.connect() as connection:
+            row = connection.execute(
+                "SELECT bundle::text,format_version FROM workstation.rag_documents WHERE workspace_id=%s AND source_uri='guide.md'",
+                (database.workspace_id,),
+            ).fetchone()
+            assert row is not None
+            payload, version = row
+            migration = connection.execute("SELECT COUNT(*) FROM workstation.migrations WHERE version=5").fetchone()
+            assert migration is not None
+            self.assertEqual(migration[0], 1)
         self.assertEqual(version, 3)
         native = json.loads(payload)
         self.assertNotIn("counts", native)
         self.assertIn("page_content", native["chunks"][0])
-        self.assertEqual(
-            connection.execute("SELECT COUNT(*) FROM rag_migrations WHERE version=3").fetchone()[0],
-            1,
-        )
-        connection.close()
         self.call(writable, "delete_document", {"path": "old-other.md"})
         self.assertEqual(self.call(readonly, "rag_status", {})["status"], "ready")
 
@@ -301,15 +293,14 @@ class RagIntegrationTests(unittest.TestCase):
 
         from workstation_agent.application.rag import RagApplication
         from workstation_agent.rag.repository import InMemoryIndexRepository
-        from workstation_agent.storage.sqlite.rag import SQLiteIndexRepository
+        from workstation_agent.storage.postgres.rag import PostgresIndexRepository
 
         memory = InMemoryIndexRepository()
         app = RagApplication(memory, RagSettings())
         for name in ("one.md", "two.md"):
             app.ingest(name, "# Heading\noriginal evidence", {})
-        repository = SQLiteIndexRepository(
-            self.settings.rag_database_path,
-            workspace=self.root,
+        repository = PostgresIndexRepository(
+            database_for(self.settings),
             max_chunks=1,
         )
 

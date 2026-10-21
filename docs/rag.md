@@ -12,8 +12,8 @@ uv run workstation-agent doctor --rag
 uv run workstation-agent rag delete docs/tools.md --approve-write
 ~~~
 
-默认结构前缀 + BM25，不需要 API key。索引保存在工作区的 .workstation-agent/rag.db。
-DATA_DIR 也必须将 RAG 数据路径指向工作区内。只读查询、工具发现和普通 doctor 不创建数据库。
+默认结构前缀 + BM25，不需要模型 API key。索引保存在 PostgreSQL 中，按工作区隔离；先按 [数据库说明](database.md) 配置连接。
+先配置 DATABASE_URL 指向 PostgreSQL；来源文件仍限制在工作区内。只读查询不建表，工具发现和普通 doctor 不连接数据库。
 摄取返回 indexed；内容、处理配置和 metadata 未变时返回 unchanged，复用已保存的派生结果。
 更新文件后再次执行 ingest。删除只清除索引及派生数据，保留原文件。
 
@@ -84,7 +84,7 @@ line_start / line_end 为一基行号，CRLF 保持不变。
 | Markdown 结构解析 | markdown-it-py 的 MarkdownIt / token.map | 原文位置映射、章节路径、代码与表格辅助说明 |
 | 文本分块 | langchain-text-splitters 的 RecursiveCharacterTextSplitter | 稳定 ID、来源区间、同章节关联及块预算 |
 | BM25 | rank-bm25 的 BM25Plus | 通过官方 BaseRetriever 接入中文与技术术语预处理、空证据和稳定同分规则 |
-| 向量检索 | langchain-core 的 InMemoryVectorStore | 官方 Embeddings 接口装载 SQLite 中已发布的向量，模型请求经授权工具提供 |
+| 向量检索 | langchain-core 的 InMemoryVectorStore | 官方 Embeddings 接口装载 PostgreSQL 中已发布的向量，模型请求经授权工具提供 |
 | 排名融合 | langchain-classic 的 EnsembleRetriever | c=60、两路同权、id_key=chunk_id，保留不同来源的相同正文 |
 | 重排组合 | ContextualCompressionRetriever / BaseDocumentCompressor | 调用已授权的模型 Protocol，校验调用预算、分数及零分过滤 |
 | 模型接入 | ChatOpenAI / OpenAIEmbeddings / with_structured_output | 上下文前缀提示、模型预算与出站权限 |
@@ -101,7 +101,7 @@ IndexRepository 仅提供 state / get / publish / delete；不再保留 upsert_d
 
 MarkdownHeaderTextSplitter 会处理空白及正文格式，其输出偏移不能直接作为原文引用；
 因此选用成熟解析器的行映射，再将未经规范化的切片交给官方递归分块器。
-框架缺少本项目要求的原子 SQLite 发布、授权边界和中文技术术语策略，通过已有接口补足这些能力。
+框架缺少本项目要求的原子 PostgreSQL 发布、授权边界和中文技术术语策略，通过已有接口补足这些能力。
 
 新增依赖为 langchain-text-splitters、langchain-classic、markdown-it-py 和 rank-bm25，
 版本由 uv.lock 固定。替代方案是继续维护旧算法，或引入外部检索数据库；前者增加算法维护，
@@ -145,7 +145,7 @@ BM25Plus 使用 k1=1.5、b=0.75、delta=1.0，避免小语料中高频词的负 
 中文采用单字与双字滑窗，英文保留技术标识符并增加分隔后的子项。
 这是一种无需词典的初始预处理策略，通过检索接口接入，建索引与查询保持一致。
 无查询词重叠的候选不会作为词法证据，空词表不构建 BM25。
-原文框架文档与按块 ID 关联的向量原子保存在 SQLite，移除重复的词频持久化；
+原文框架文档与按块 ID 关联的向量原子保存在 PostgreSQL，移除重复的词频持久化；
 查询从过滤后的增强文本构建 BM25，通过官方 Embeddings 接口装载已有向量，
 再由 InMemoryVectorStore 精确检索，
 不会重新生成文档向量，查询向量只通过授权模型工具生成。
@@ -223,11 +223,11 @@ missing / needs_reindex 或缺少必要模型授权与 API key 时退出非零�
 migration 002_rag.sql 建立发布记录表，003_rag_native_documents.sql 引入原生文档格式标记，随包交付。
 单条记录保存 SourceDocument、原文 Document、metadata、按块 ID 关联的向量和处理指纹，完整构建后事务替换。
 内存仓库也只维护完整快照，读取返回隔离的框架对象，调用方修改 Document 不会污染已发布版本。
-并发发布按 SQLite 写事务串行提交，总块预算在事务内强制检查。
+同一工作区的并发发布按 PostgreSQL 事务锁串行提交，总块预算在事务内强制检查。
 查询单条 SELECT 获取快照，失败、删除和更新不暴露索引版本混用的中间状态。
 
 非法路径、格式、UTF-8、参数、预算和索引配置有明确错误码。
-模型与 SQLite 意外异常不回显凭据、底层消息或原始敏感内容。
+模型与 PostgreSQL 意外异常不回显凭据、底层消息或原始敏感内容。
 失败更新可修复配置后重试，旧版本保留；源文件变更不自动触发摄取。
 
 ## 验收与剩余事项
@@ -240,7 +240,7 @@ uv build
 
 测试覆盖 ATX / Setext 标题、重复文本与 CRLF 原文位置、代码表格保护、
 中文排序与按块 ID 融合、重启后复用文档向量、向量验证、过滤及扩展、完整证据预算、
-SQLite 重启与更新删除、旧格式不解码、授权迁移与逐来源重建、失败回滚和并发预算、
+PostgreSQL 重启与更新删除、旧格式不解码、授权迁移与逐来源重建、失败回滚和并发预算、
 原生 Document 读取隔离、块 ID 与向量映射校验、路径与模型权限、错误脱敏、真实 CLI、
 官方 SDK 的 HTTP 夹具，以及单 Agent 两次检索、重复停止和次数限制。
 

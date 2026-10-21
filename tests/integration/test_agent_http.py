@@ -1,4 +1,4 @@
-"""验证 HTTP 入口复用官方 Agent、SQLite 审批和受控工具执行链。"""
+"""验证 HTTP 入口复用官方 Agent、PostgreSQL 审批和受控工具执行链。"""
 
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ from tests.unit.test_execution_control import CountingTool, EchoArguments
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
 from workstation_agent.application.agent_service import ServiceRun
-from workstation_agent.bootstrap import MemoryApprovalPolicy
+from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for
 from workstation_agent.config import Settings
 from workstation_agent.domain.runs import RunStatus
 from workstation_agent.interfaces.agent_http import build_agent_service
 from workstation_agent.safety import AllowSafeReadsPolicy, PermissionLevel
-from workstation_agent.storage.sqlite.sessions import SQLiteSessionBackend
+from workstation_agent.storage.postgres.checkpoints import PostgresSessionBackend
 from workstation_agent.tools.checkpoints import AuthorizedCheckpointer
 from workstation_agent.tools.execution import check_execution
 from workstation_agent.tools.executor import ToolExecutor
@@ -65,12 +65,12 @@ class AgentHttpTests(unittest.TestCase):
         self.tool: CountingTool = CountingTool()
 
     def client(self, responses: list[BaseMessage], *, timeout: float = 300) -> TestClient:
-        """每次启动独立应用实例，但会话使用相同的真实 SQLite 路径。"""
+        """每次启动独立应用实例，但会话使用同一 PostgreSQL 数据库和工作区分区。"""
         @asynccontextmanager
         async def application() -> AsyncIterator[AgentApplication]:
             checkpointer = AuthorizedCheckpointer(
-                SQLiteSessionBackend(
-                    self.settings.session_database_path, self.settings.workspace,
+                PostgresSessionBackend(
+                    database_for(self.settings),
                     secrets=(self.settings.agent_service_token,),
                 ), self.settings.memory_access, MemoryApprovalPolicy(sessions=True),
             )

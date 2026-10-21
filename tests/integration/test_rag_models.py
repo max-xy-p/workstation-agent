@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.postgres_support import has_rag
 from workstation_agent.bootstrap import build_tool_application
 from workstation_agent.config import Settings
 from workstation_agent.rag.config import RagSettings
@@ -147,7 +148,7 @@ class RagModelIntegrationTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertNotIn("private-fixture-token", result.content)
         self.assertNotIn("private-test-api-key", result.content)
-        self.assertFalse(self.settings.rag_database_path.exists())
+        self.assertFalse(has_rag(self.settings))
 
     def test_no_authorization_produces_no_http_request(self):
         settings = replace(self.settings, rag=replace(self.settings.rag, allow_remote=False))

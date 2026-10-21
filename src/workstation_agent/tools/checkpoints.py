@@ -100,7 +100,7 @@ class AuthorizedCheckpointer(BaseCheckpointSaver):
 
     @contextmanager
     def lease(self, config: RunnableConfig, *, deleting: bool = False) -> Iterator[None]:
-        """整个运行和清除互斥；权限检查通过后才创建或获取本机文件锁。"""
+        """整个运行和清除互斥；权限检查通过后才获取数据库会话锁。"""
         name = "session_lease_delete" if deleting else "session_lease"
         permission = PermissionLevel.DESTRUCTIVE if deleting else PermissionLevel.CONTROLLED_WRITE
         handle = authorized_operation(

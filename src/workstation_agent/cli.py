@@ -15,7 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic import __version__ as pydantic_version
 
 from . import __version__
-from .bootstrap import build_infrastructure, build_tool_application
+from .bootstrap import build_tool_application
 from .config import Settings
 from .context.config import ContextConfigurationError
 from .context.state import TaskBoard
@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument("--agent", action="store_true", help="check model and MCP configuration")
     doctor.add_argument("--http", action="store_true", help="check independent Agent service configuration")
+    doctor.add_argument("--database", action="store_true", help="check the PostgreSQL connection without migrations")
     run = subparsers.add_parser("run", help="run a task with the official LangChain agent")
     run.add_argument("task")
     run.add_argument("--session", help="persist and continue this session ID")
@@ -129,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     clear = session_commands.add_parser("clear")
     clear.add_argument("session_id")
     clear.add_argument("--approve-delete", action="store_true")
-    subparsers.add_parser("init-db", help="initialize the local SQLite state database")
+    subparsers.add_parser("init-db", help="initialize PostgreSQL business and checkpoint schemas")
     return parser
 
 
@@ -158,7 +159,7 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
     print(f"workspace exists: {settings.workspace.is_dir()}")
     print(f"model: {settings.model or '(not configured)'}")
     print(f"max steps: {settings.max_steps}")
-    print(f"database: {settings.database_path}")
+    print(f"PostgreSQL: {'configured' if settings.database_url else '(not configured)'}")
     print(f"tool output chars: {settings.tool_output_chars}")
     print(f"pydantic: {pydantic_version}")
     print(f"langchain: {version('langchain')}")
@@ -182,6 +183,14 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
     print(f"max tool calls: {settings.max_tool_calls}")
     ready = _doctor_rag(args, settings) and ready
     ready = _doctor_memory(args, settings) and ready
+    if args.database:
+        from .bootstrap import build_database_application
+        try:
+            connected = build_database_application(settings).check()
+        except Exception:
+            connected = False
+        print(f"PostgreSQL connection: {'ok' if connected else 'unavailable'}")
+        ready = connected and ready
     if args.agent or args.http:
         ready = _doctor_agent(settings, require_mcp=args.agent) and ready
     if args.http:
@@ -202,11 +211,7 @@ def _doctor_rag(args: argparse.Namespace, settings: Settings) -> bool:
     print(f"RAG remote authorized: {settings.rag.allow_remote}")
     print(f"RAG chunk size / overlap: {settings.rag.chunk_size} / {settings.rag.chunk_overlap}")
     print(f"RAG context budget (UTF-8 upper bound): {settings.rag.context_budget}")
-    try:
-        print(f"RAG database: {settings.rag_database_path}")
-    except ValueError:
-        print("RAG data path is outside workspace")
-        ready = False
+    print("RAG storage: PostgreSQL, workspace partition")
     if args.rag and (settings.rag.embedding_model or settings.rag.context_model):
         ready = ready and bool(settings.api_key and settings.rag.allow_remote)
     if args.rag:
@@ -261,11 +266,11 @@ def _doctor_memory(args: argparse.Namespace, settings: Settings) -> bool:
     print(f"Context summary enabled: {settings.context.summarize}")
     if settings.context.summarize and not settings.memory.allow_remote:
         print("Context summary unavailable: MEMORY_ALLOW_REMOTE authorization required")
-    print(f"langgraph-checkpoint-sqlite: {version('langgraph-checkpoint-sqlite')}")
+    print(f"langgraph-checkpoint-postgres: {version('langgraph-checkpoint-postgres')}")
     print(f"langmem: {version('langmem')}")
     try:
-        print(f"Memory database: {settings.memory_database_path}")
-        print(f"Session database: {settings.session_database_path}")
+        print("Memory storage: PostgreSQL, workspace and scope partitions")
+        print("Session storage: official PostgreSQL checkpointer")
         if args.memory and settings.memory.enabled:
             from .bootstrap import build_memory_application
 
@@ -282,7 +287,7 @@ def _doctor_memory(args: argparse.Namespace, settings: Settings) -> bool:
 def _doctor_agent(settings: Settings, *, require_mcp: bool = True) -> bool:
     """校验模型、连接和上下文容量，不发送探测请求。"""
     ready = True
-    ready = ready and bool(settings.model and settings.api_key)
+    ready = ready and bool(settings.model and settings.api_key and settings.database_url)
     if require_mcp:
         ready = ready and bool(settings.service_token)
     try:
@@ -612,10 +617,14 @@ def _tool(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _init_db(settings: Settings) -> int:
-    """通过存储初始化入口创建业务任务数据库。"""
-    infrastructure = build_infrastructure(settings)
-    infrastructure.runs.initialize()
-    print(f"initialized database: {settings.database_path}")
+    """通过受控初始化用例执行业务表和官方检查点迁移。"""
+    from .bootstrap import build_database_application
+    try:
+        build_database_application(settings).initialize()
+    except Exception:
+        print("PostgreSQL initialization failed; check database configuration and permissions", file=sys.stderr)
+        return 1
+    print("initialized PostgreSQL business and checkpoint schemas")
     return 0
 
 

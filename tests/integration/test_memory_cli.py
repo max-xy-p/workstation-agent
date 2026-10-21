@@ -19,7 +19,6 @@ class MemoryCLIIntegrationTests(unittest.TestCase):
                 "WORKSTATION_AGENT_USER_ID": "local",
                 "WORKSTATION_AGENT_MEMORY_ENABLED": "true",
                 "WORKSTATION_AGENT_MEMORY_AUTO_EXTRACT": "false",
-                "WORKSTATION_AGENT_DATA_DIR": str(Path(directory) / ".workstation-agent"),
                 "PYTHONUTF8": "1",
             }
 

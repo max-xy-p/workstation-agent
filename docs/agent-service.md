@@ -7,6 +7,7 @@ Agent HTTP 服务让桌面界面或其他本机客户端提交完整任务，查
 ## 配置和启动
 
 先按 [README](../README.md) 配置模型名称、API Key、接口地址和真实上下文窗口。
+还需要按 [数据库说明](database.md) 配置 PostgreSQL 并执行 `init-db`。
 模型需要支持 OpenAI 兼容的 Chat Completions 和工具调用。
 在项目根目录的 PowerShell 7 中运行：
 
@@ -130,6 +131,6 @@ HTTP 路由仅调用 `application/agent_service.py` 的任务用例，工具和�
 维护成本集中在请求取消、服务关闭、审批恢复回调和内存记录淘汰；升级框架时需要重跑对应回归。
 
 新增回归位于 `tests/integration/test_agent_http.py`，覆盖请求校验、来源与令牌、审批拒绝、
-SQLite 重启恢复、忙碌拒绝、超时及取消收尾。
+PostgreSQL 重启恢复、忙碌拒绝、超时及取消收尾。
 `tests/integration/test_framework_agent.py` 额外启动真实 Agent HTTP 进程，经官方模型 SDK 的本机接口夹具和独立 MCP 服务完成读取。
 这些回归验证本次服务实现，不调用外部模型，也不代表外部模型质量验收。

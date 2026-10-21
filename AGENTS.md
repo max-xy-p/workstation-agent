@@ -10,7 +10,7 @@
 
 ## 架构边界
 
-- `domain/` 只包含稳定领域对象，不依赖 SQLite、模型 SDK 或 UI。
+- `domain/` 只包含稳定领域对象，不依赖具体数据库、模型 SDK 或 UI。
 - `agent/` 负责编排和状态流转，不直接访问数据库、文件系统或外部网络。
 - `context/` 是记忆和 RAG 进入 Prompt 的唯一组装入口。
 - `memory/` 保存用户或任务经验；`rag/` 管理外部知识，两者不得混用。
@@ -55,7 +55,7 @@ interfaces → application → agent/context → domain
    简单局部变量可以使用可靠的类型推断，不要求逐个重复标注。
 2. **优先使用现有类型和协议。** 框架已有公开接口时，使用其官方类型。
    项目需要额外能力时，优先扩展现有 `Protocol`；确有独立职责再定义小型协议，
-   写清实际需要的方法。不为补类型注解新增无用的包装类，也不让核心层依赖具体 SQLite 或供应商实现。
+   写清实际需要的方法。不为补类型注解新增无用的包装类，也不让核心层依赖具体数据库或供应商实现。
 3. **普通业务调用必须使用明确的方法。** 例如直接写 `backend.get_tuple(config)`，
    不得把它变成 `backend.call("get_tuple", config)` 或 `getattr(backend, operation)(...)`。
    不用无类型的 `*args/**kwargs` 隐藏本来明确的参数；框架要求的扩展签名除外。
@@ -115,7 +115,7 @@ interfaces → application → agent/context → domain
 ## 测试要求
 
 - 领域规则、排序、权限和纯逻辑放在 `tests/unit/`。
-- SQLite、模型适配器、文件系统等边界放在 `tests/integration/`。
+- PostgreSQL、模型适配器、文件系统等边界放在 `tests/integration/`。
 - 完整用户任务以后放在 `tests/scenarios/`。
 - 修复缺陷时先增加能复现问题的测试。
 - 所有改动至少运行：

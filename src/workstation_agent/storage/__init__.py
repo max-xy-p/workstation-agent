@@ -1,4 +1,4 @@
 from .base import RunRepository
-from .sqlite import SQLiteRunRepository
+from .postgres import PostgresDatabase, PostgresRunRepository
 
-__all__ = ["RunRepository", "SQLiteRunRepository"]
+__all__ = ["RunRepository", "PostgresDatabase", "PostgresRunRepository"]

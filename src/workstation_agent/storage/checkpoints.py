@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from typing import Any, BinaryIO, Protocol
+from typing import Any, Protocol
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -15,12 +15,18 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.base import SerializerProtocol
 
 
+class SessionLease(Protocol):
+    """释放已获取的会话锁，具体句柄由存储实现管理。"""
+
+    def close(self) -> None: ...
+
+
 class SessionBackend(Protocol):
-    """使用官方类型保存和读取检查点，另提供本机会话互斥锁。"""
+    """使用官方类型保存和读取检查点，另提供跨进程会话互斥锁。"""
 
     @property
     def serde(self) -> SerializerProtocol: ...
-    def acquire(self, thread_id: str) -> BinaryIO: ...
+    def acquire(self, thread_id: str) -> SessionLease: ...
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None: ...
     def list(
         self,

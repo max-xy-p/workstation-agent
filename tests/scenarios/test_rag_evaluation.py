@@ -12,7 +12,7 @@ CORPUS = {
     "configuration.md": (
         "# 模型配置\nWORKSTATION_AGENT_MODEL 指定模型名称，API Key 通过环境变量注入。"
     ),
-    "storage.md": "# 存储\nSQLite 使用事务发布新版本，失败后保留原来的文档版本。",
+    "storage.md": "# 存储\nPostgreSQL 使用事务发布新版本，失败后保留原来的文档版本。",
 }
 QUESTIONS = [
     ("ToolExecutor 默认只读", {"permissions.md"}),
@@ -20,7 +20,7 @@ QUESTIONS = [
     ("工具路由", {"routing.md"}),
     ("WORKSTATION_AGENT_MODEL", {"configuration.md"}),
     ("API Key", {"configuration.md"}),
-    ("SQLite 事务发布", {"storage.md"}),
+    ("PostgreSQL 事务发布", {"storage.md"}),
     ("权限检查和写入审批", {"routing.md", "permissions.md"}),
 ]
 

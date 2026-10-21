@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from langchain_core.messages import AIMessage
 from pydantic import Field
 
+from tests.postgres_support import has_memory
 from tests.test_agent import ScriptedModel, call_message
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication
@@ -65,4 +66,4 @@ class MemoryAgentScenarios(unittest.IsolatedAsyncioTestCase):
                 "记住使用中文"
             )
             self.assertEqual(run.status.value, "waiting_approval")
-            self.assertFalse(settings.memory_database_path.exists())
+            self.assertFalse(has_memory(settings))

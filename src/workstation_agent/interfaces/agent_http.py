@@ -89,7 +89,7 @@ def build_agent_service(
         raise ValueError("Agent 服务需要工作区和 WORKSTATION_AGENT_HTTP_TOKEN")
     if transport == "mcp" and settings.agent_service_port == settings.service_port:
         raise ValueError("Agent HTTP 与 MCP 工具服务需要使用不同端口")
-    secrets = (settings.api_key, settings.service_token, settings.agent_service_token)
+    secrets = (settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url)
 
     def default_factory() -> AbstractAsyncContextManager[AgentApplication]:
         return build_agent_application(settings, transport=transport, persist_session=True)

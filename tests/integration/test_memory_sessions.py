@@ -13,13 +13,14 @@ from workstation_agent.bootstrap import (
     MemoryApprovalPolicy,
     build_memory_application,
     build_session_application,
+    database_for,
 )
 from workstation_agent.config import Settings
 from workstation_agent.context import ContextBuilder
 from workstation_agent.context.config import ContextSettings
 from workstation_agent.memory.config import MemorySettings
 from workstation_agent.safety import PermissionRequired
-from workstation_agent.storage.sqlite.sessions import SQLiteSessionBackend
+from workstation_agent.storage.postgres.checkpoints import PostgresSessionBackend
 from workstation_agent.tools.checkpoints import AuthorizedCheckpointer
 from workstation_agent.tools.contracts import ToolError
 
@@ -33,7 +34,7 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def saver(self, settings=None):
         settings = settings or self.settings
         return AuthorizedCheckpointer(
-            SQLiteSessionBackend(settings.session_database_path, settings.workspace),
+            PostgresSessionBackend(database_for(settings)),
             settings.memory_access,
             MemoryApprovalPolicy(sessions=True),
         )
@@ -64,6 +65,7 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         second = await app.run_task("继续讨论", session_id="chat")
         self.assertEqual(second.status.value, "completed")
         state = restarted.get_tuple(restarted.config("chat"))
+        assert state is not None
         users = [
             m.content
             for m in state.checkpoint["channel_values"]["messages"]
@@ -84,6 +86,7 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         first = await app.run_task("Python 项目", session_id="chat")
         self.assertTrue(any(s.name == "context_sources" for s in first.steps))
         state = saver.get_tuple(saver.config("chat"))
+        assert state is not None
         self.assertNotIn(record["id"], repr(state.checkpoint))
         memory.execute("delete_memory", {"memory_id": record["id"], "expected_version": 1})
         second = await app.run_task("Python 项目", session_id="chat")
@@ -114,7 +117,7 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_output_is_not_persisted_and_known_keys_are_redacted(self):
         from langchain_core.messages import ToolMessage
 
-        from workstation_agent.storage.sqlite.sessions import SessionSerializer
+        from workstation_agent.storage.session_serializer import SessionSerializer
 
         serializer = SessionSerializer(("private-known-key",))
         values = [
@@ -204,7 +207,7 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.steps[-1].status.value, "completed")
         memory = build_memory_application(settings)
         self.assertEqual(memory.search("喜欢中文")[0].content, "用户喜欢中文")
-        self.assertTrue(settings.session_database_path.exists())
+        self.assertIsNotNone(self.saver(settings).get_tuple(self.saver(settings).config("bootstrap")))
 
     async def test_task_board_survives_restart_and_user_can_start_new_task(self) -> None:
         saver = self.saver()
@@ -225,14 +228,18 @@ class SessionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             checkpointer=restarted,
         )
         await app.run_task("补充要求", session_id="board", constraints=("使用中文",))
-        board = restarted.get_tuple(restarted.config("board")).checkpoint["channel_values"][
+        saved = restarted.get_tuple(restarted.config("board"))
+        assert saved is not None
+        board = saved.checkpoint["channel_values"][
             "task_board"
         ]
         self.assertEqual(board["goal"], "初始目标")
         self.assertEqual(board["constraints"], ["只读", "使用中文"])
         self.assertEqual(board["current_request"], "补充要求")
         await app.run_task("新任务", session_id="board", new_task=True)
-        board = restarted.get_tuple(restarted.config("board")).checkpoint["channel_values"][
+        saved = restarted.get_tuple(restarted.config("board"))
+        assert saved is not None
+        board = saved.checkpoint["channel_values"][
             "task_board"
         ]
         self.assertEqual(board["goal"], "新任务")

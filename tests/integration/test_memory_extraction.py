@@ -7,16 +7,17 @@ from tempfile import TemporaryDirectory
 
 from langchain_core.messages import AIMessage
 
+from tests.postgres_support import has_memory
 from tests.test_agent import ScriptedModel
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
-from workstation_agent.bootstrap import MemoryApprovalPolicy, build_memory_application
+from workstation_agent.bootstrap import MemoryApprovalPolicy, build_memory_application, database_for
 from workstation_agent.config import Settings
 from workstation_agent.memory.config import MemorySettings
 from workstation_agent.memory.models import MemoryCandidate
 from workstation_agent.memory.service import MemoryService
 from workstation_agent.models.providers.memory import LangMemExtractor
-from workstation_agent.storage.sqlite.memory import SQLiteMemoryRepository
+from workstation_agent.storage.postgres.memory import PostgresMemoryRepository
 from workstation_agent.tools import ToolExecutor, ToolRegistry
 from workstation_agent.tools.contracts import ToolError
 from workstation_agent.tools.extraction import MemoryExtractionTool
@@ -40,7 +41,7 @@ class ExtractionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.settings = Settings(self.root, memory=MemorySettings(auto_extract=True))
-        self.repository = SQLiteMemoryRepository(self.settings.memory_database_path, self.root)
+        self.repository = PostgresMemoryRepository(database_for(self.settings))
         self.service = MemoryService(self.repository)
 
     def runner(self, extractor, *, remote=True, automatic=True):
@@ -107,14 +108,14 @@ class ExtractionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         result = self.runner(extractor, remote=False).execute_tool("extract_memory", self.args())
         self.assertEqual(result.error_code, "permission_required")
         self.assertEqual(extractor.called, 0)
-        self.assertFalse(self.settings.memory_database_path.exists())
+        self.assertFalse(has_memory(self.settings))
 
     async def test_candidate_cannot_bypass_write_permission(self):
         result = self.runner(FixedExtractor([self.candidate()]), automatic=False).execute_tool(
             "extract_memory", self.args()
         )
         self.assertEqual(result.error_code, "permission_required")
-        self.assertFalse(self.settings.memory_database_path.exists())
+        self.assertFalse(has_memory(self.settings))
 
     async def test_uncertain_or_unsupported_claims_do_not_become_notes(self):
         candidates = [
@@ -150,7 +151,7 @@ class ExtractionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         class DeletingExtractor:
             """提取与删除交错，验证提交时再次检查水位。"""
 
-            def extract(inner, text, existing):
+            def extract(self, text, existing):
                 app.execute("delete_memory", {"memory_id": old["id"], "expected_version": 1})
                 return (candidate,)
 
@@ -162,7 +163,7 @@ class ExtractionIntegrationTests(unittest.IsolatedAsyncioTestCase):
         class BrokenExtractor:
             """供应商异常可能包含凭据，不能回显。"""
 
-            def extract(inner, text, existing):
+            def extract(self, text, existing):
                 raise RuntimeError("private-provider-secret")
 
         runner = self.runner(BrokenExtractor())

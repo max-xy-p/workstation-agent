@@ -1,4 +1,4 @@
-"""验证真实 SQLite、受控工具和中文召回的长期记忆闭环。"""
+"""验证真实 PostgreSQL、受控工具和中文召回的长期记忆闭环。"""
 
 import unittest
 from dataclasses import replace
@@ -6,11 +6,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from workstation_agent.bootstrap import build_memory_application
+from tests.postgres_support import has_memory
+from workstation_agent.bootstrap import build_memory_application, database_for
 from workstation_agent.config import Settings
 from workstation_agent.memory.config import MemorySettings
 from workstation_agent.memory.models import MemoryRecord, MemorySource
-from workstation_agent.storage.sqlite.memory import SQLiteMemoryRepository
+from workstation_agent.storage.postgres.memory import PostgresMemoryRepository
 from workstation_agent.tools.contracts import ToolError
 
 
@@ -30,7 +31,7 @@ class MemoryIntegrationTests(unittest.TestCase):
         self.assertEqual(app.execute("list_memories", {})["total"], 0)
         result = app.tools.execute_tool("remember_memory", {"content": "使用中文"})
         self.assertEqual(result.error_code, "permission_required")
-        self.assertFalse(self.settings.memory_database_path.exists())
+        self.assertFalse(has_memory(self.settings))
 
     def test_restart_crud_chinese_recall_and_unrelated_exclusion(self):
         record = self.add()
@@ -94,7 +95,7 @@ class MemoryIntegrationTests(unittest.TestCase):
     def test_generation_invalidates_inflight_candidate_and_batch_survives_forgetting(self):
         access = self.settings.memory_access
         scope = access.scope()
-        repository = SQLiteMemoryRepository(self.settings.memory_database_path, self.root)
+        repository = PostgresMemoryRepository(database_for(self.settings))
         record = MemoryRecord(
             content="项目使用 uv",
             scope=scope,
@@ -111,10 +112,10 @@ class MemoryIntegrationTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "stale_extraction")
         self.assertEqual(repository.records((scope,)), ())
 
-    def test_sqlite_batch_rolls_back_and_capacity_is_checked_inside_transaction(self):
+    def test_postgres_batch_rolls_back_and_capacity_is_checked_inside_transaction(self):
         scope = self.settings.memory_access.scope()
-        repository = SQLiteMemoryRepository(
-            self.settings.memory_database_path, self.root, max_records=1
+        repository = PostgresMemoryRepository(
+            database_for(self.settings), max_records=1
         )
         records = tuple(
             MemoryRecord(
@@ -130,7 +131,6 @@ class MemoryIntegrationTests(unittest.TestCase):
         result = self.app.tools.execute_tool("remember_memory", {"content": "api_key=private123"})
         self.assertEqual(result.error_code, "sensitive_content")
         self.assertNotIn("private123", result.content)
-        self.assertFalse(self.settings.memory_database_path.exists())
-        outside_settings = replace(self.settings, data_dir=self.root.parent)
-        with self.assertRaises(ValueError):
-            build_memory_application(outside_settings)
+        self.assertFalse(has_memory(self.settings))
+        other = build_memory_application(replace(self.settings, workspace=self.root / "other"))
+        self.assertEqual(other.execute("list_memories", {})["total"], 0)

@@ -1,4 +1,6 @@
-"""验证 SQLite 会话重启后审批和状态验收仍然有效。"""
+"""验证 PostgreSQL 会话重启后审批和状态验收仍然有效。"""
+
+from __future__ import annotations
 
 import asyncio
 import unittest
@@ -13,10 +15,11 @@ from tests.unit.test_context_management import call
 from tests.unit.test_execution_control import CountingTool, EchoArguments
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
-from workstation_agent.bootstrap import MemoryApprovalPolicy
+from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for
 from workstation_agent.config import Settings
 from workstation_agent.safety import AllowSafeReadsPolicy
-from workstation_agent.storage.sqlite.sessions import SessionSerializer, SQLiteSessionBackend
+from workstation_agent.storage.postgres.checkpoints import PostgresSessionBackend
+from workstation_agent.storage.session_serializer import SessionSerializer
 from workstation_agent.tools.checkpoints import AuthorizedCheckpointer
 from workstation_agent.tools.executor import ToolExecutor
 from workstation_agent.tools.langchain import local_tools
@@ -33,7 +36,7 @@ class PersistentResumeTests(unittest.IsolatedAsyncioTestCase):
 
     def application(self, responses: list[BaseMessage]) -> AgentApplication:
         saver = AuthorizedCheckpointer(
-            SQLiteSessionBackend(self.settings.session_database_path, self.settings.workspace),
+            PostgresSessionBackend(database_for(self.settings)),
             self.settings.memory_access,
             MemoryApprovalPolicy(sessions=True),
         )
