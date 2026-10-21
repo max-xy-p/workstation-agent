@@ -62,18 +62,21 @@ class PostgresDatabase:
             raise ToolError("PostgreSQL 操作失败，请检查连接和数据库权限", code="database_failed") from None
 
     def initialize(self) -> None:
-        """在授权写入时执行版本 5 迁移；并发初始化由数据库事务锁保护。"""
-        migration = files("workstation_agent.storage.migrations").joinpath("005_postgresql.sql")
+        """按版本执行随包迁移；并发初始化由数据库事务锁保护。"""
         with self.connect() as connection:
             self.lock(connection, "business-migrations", global_lock=True)
             connection.execute("CREATE SCHEMA IF NOT EXISTS workstation")
             connection.execute("CREATE TABLE IF NOT EXISTS workstation.migrations(version INTEGER PRIMARY KEY)")
-            if connection.execute("SELECT 1 FROM workstation.migrations WHERE version=5").fetchone():
-                return
-            # SQL 仅来自随包发布的迁移资源，不接受用户传入的 SQL 文本。
-            migration_sql = cast(LiteralString, migration.read_text(encoding="utf-8"))
-            connection.execute(sql.SQL(migration_sql))
-            connection.execute("INSERT INTO workstation.migrations(version) VALUES (5)")
+            for version, filename in ((5, "005_postgresql.sql"), (6, "006_conversations.sql")):
+                if connection.execute(
+                    "SELECT 1 FROM workstation.migrations WHERE version=%s", (version,)
+                ).fetchone():
+                    continue
+                migration = files("workstation_agent.storage.migrations").joinpath(filename)
+                # SQL 仅来自随包发布的迁移资源，不接受用户传入的 SQL 文本。
+                migration_sql = cast(LiteralString, migration.read_text(encoding="utf-8"))
+                connection.execute(sql.SQL(migration_sql))
+                connection.execute("INSERT INTO workstation.migrations(version) VALUES (%s)", (version,))
 
     @contextmanager
     def transaction(self, *, write: bool = False) -> Iterator[Connection | None]:

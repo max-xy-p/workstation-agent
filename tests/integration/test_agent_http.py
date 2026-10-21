@@ -197,6 +197,88 @@ class AgentHttpTests(unittest.TestCase):
             completed = self.wait_run(client, run.id, RunStatus.COMPLETED)
             self.assertNotIn(str(self.settings.agent_service_token), str(completed.answer))
 
+    def test_session_crud_and_pagination_validate_revision(self) -> None:
+        with self.client([AIMessage(content="完成")]) as client:
+            created = client.post("/sessions", json={"title": "第一场对话"})
+            self.assertEqual(created.status_code, 201, created.text)
+            session = created.json()
+            path = f"/sessions/{session['id']}"
+            self.assertEqual(session["revision"], 0)
+            self.assertEqual(client.get(path).json(), session)
+            client.post("/sessions", json={"title": "第二场对话"})
+            page = client.get("/sessions?limit=1").json()
+            self.assertEqual(len(page["items"]), 1)
+            self.assertEqual(page["next_offset"], 1)
+            self.assertEqual(len(client.get("/sessions?limit=1&offset=1").json()["items"]), 1)
+            renamed = client.patch(path, json={"title": "新标题", "revision": 0})
+            self.assertEqual(renamed.status_code, 200, renamed.text)
+            self.assertEqual(renamed.json()["revision"], 1)
+            self.assertEqual(client.patch(path, json={"title": "过期", "revision": 0}).status_code, 409)
+            self.assertEqual(client.delete(path + "?revision=0").status_code, 409)
+            self.assertEqual(client.delete(path + "?revision=1").status_code, 200)
+            self.assertEqual(client.get(path).status_code, 404)
+            self.assertEqual(client.get(path + "/messages").status_code, 404)
+            for query in ("limit=0", "limit=101", "offset=-1", "limit=no", "unknown=1"):
+                self.assertEqual(client.get("/sessions?" + query).status_code, 422)
+            self.assertEqual(client.get("/sessions/bad.id").status_code, 422)
+            self.assertEqual(client.post("/sessions", json={"title": " "}).status_code, 422)
+            self.assertEqual(client.post("/sessions", json={"scope": "other"}).status_code, 422)
+
+    def test_message_crud_persists_without_invoking_agent(self) -> None:
+        with self.client([AIMessage(content="完成")]) as client:
+            session = client.post("/sessions", json={}).json()
+            path = f"/sessions/{session['id']}/messages"
+            first = client.post(path, json={"content": "第一条", "revision": 0})
+            self.assertEqual(first.status_code, 201, first.text)
+            message = first.json()
+            self.assertEqual(client.get(path + "/" + message["id"]).json(), message)
+            self.assertEqual(client.post(path, json={"content": "旧版本", "revision": 0}).status_code, 409)
+            self.assertEqual(client.post(path, json={"content": "第二条", "revision": 1}).status_code, 201)
+            self.assertEqual(client.get(path + "?limit=1").json()["next_offset"], 1)
+            edited = client.patch(path + "/" + message["id"], json={"content": "改写", "revision": 2})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            self.assertEqual(len(client.get(path).json()["items"]), 1)
+            self.assertEqual(client.get("/runs").json(), [])
+            self.assertEqual(client.post(path, json={"content": "伪造", "revision": 3, "role": "assistant"}).status_code, 422)
+        with self.client([AIMessage(content="完成")]) as client:
+            self.assertEqual(client.get(path).json()["items"][0]["content"], "改写")
+            self.assertEqual(client.delete(path + "/" + message["id"] + "?revision=3").status_code, 200)
+            self.assertEqual(client.get(path).json()["items"], [])
+            self.assertEqual(client.get(path + "/" + message["id"]).status_code, 404)
+
+    def test_run_journal_and_approval_guard_survive_restart(self) -> None:
+        with self.client([call_message("count", {}), AIMessage(content="答复")]) as client:
+            run = _RUN.validate_json(client.post("/runs", json={"task": "需审批", "session_id": "guard"}).content)
+            self.wait_run(client, run.id, RunStatus.WAITING_APPROVAL)
+            session = client.get("/sessions/guard").json()
+            path = "/sessions/guard/messages/" + run.id + "_user"
+            self.assertEqual(client.patch(path, json={"content": "覆盖", "revision": session["revision"]}).status_code, 409)
+            self.assertEqual(client.delete(f"/sessions/guard?revision={session['revision']}").status_code, 409)
+        with self.client([AIMessage(content="完成")]) as client:
+            session = client.get("/sessions/guard").json()
+            self.assertEqual(client.delete(f"/sessions/guard?revision={session['revision']}").status_code, 409)
+            pending = client.get("/sessions/guard/approvals").json()
+            client.post("/sessions/guard/resume", json={"decisions": {key: "reject" for key in pending}})
+            self.wait_run(client, run.id, RunStatus.COMPLETED)
+            messages = client.get("/sessions/guard/messages").json()["items"]
+            self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
+            self.assertEqual({message["run_id"] for message in messages}, {run.id})
+            session = client.get("/sessions/guard").json()
+            self.assertEqual(client.patch("/sessions/guard/messages/" + messages[1]["id"],
+                json={"content": "伪造答复", "revision": session["revision"]}).status_code, 409)
+
+    def test_active_run_prevents_history_deletion(self) -> None:
+        tool = BlockingReadTool()
+        self.tool = tool
+        with self.client([call_message("count", {})]) as client:
+            run = _RUN.validate_json(client.post("/runs", json={"task": "等待"}).content)
+            self.assertTrue(tool.started.wait(5))
+            session = client.get(f"/sessions/{run.session_id}").json()
+            response = client.delete(f"/sessions/{run.session_id}?revision={session['revision']}")
+            self.assertEqual(response.status_code, 409, response.text)
+            client.post(f"/runs/{run.id}/cancel")
+            self.wait_run(client, run.id, RunStatus.CANCELLED)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,7 @@ from ..context.state import ContextRuntime, RunControlState, TaskBoard, restore_
 from ..context.status import confirm_items
 from ..domain.execution import ExecutionControl, ExecutionStopped
 from ..domain.runs import Run, RunStatus, Session, Step, StepKind
+from ..domain.conversations import ConversationMessage
 from ..memory.models import MemorySource
 from ..safety import PermissionRequired
 from ..tools.approval import ApprovalDecision, ApprovalRequest
@@ -58,6 +59,13 @@ class SessionCheckpointer(Protocol):
     ) -> AbstractContextManager[None]: ...
 
 
+class ConversationHistory(Protocol):
+    """在应用已取得会话锁时保存文本，框架仍独立维护执行检查点。"""
+
+    def start(self, run: Run, *, restore: bool) -> list[ConversationMessage]: ...
+    def finish(self, run: Run) -> None: ...
+
+
 class AgentApplication:
     """协调一次调用，框架负责循环与检查点，工具边界负责所有副作用。"""
 
@@ -70,6 +78,7 @@ class AgentApplication:
         checkpointer: SessionCheckpointer | None = None,
         extraction: ToolService | None = None,
         run_timeout: float = 300.0,
+        history: ConversationHistory | None = None,
     ) -> None:
         if not math.isfinite(run_timeout) or run_timeout <= 0:
             raise ValueError("整次任务超时必须为正数")
@@ -80,6 +89,7 @@ class AgentApplication:
         self.repository = repository
         self.checkpointer = checkpointer
         self.extraction = extraction
+        self.history: ConversationHistory | None = history
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     async def run_task(
@@ -241,6 +251,16 @@ class AgentApplication:
         on_started: Callable[[str], None] | None = None,
     ) -> Run:
         run, control_state = self._prepare_run(task, session_id, runtime, saved_control)
+        inputs_messages: list[AnyMessage | dict[str, Any]] = [HumanMessage(content=task, id=run.id + "_user")]
+        if self.history is not None:
+            snapshot = await self.graph.aget_state(config)
+            saved_messages = self.history.start(run, restore=not snapshot.values.get("messages"))
+            if resume is None:
+                inputs_messages = [
+                    HumanMessage(content=message.content, id=message.id) if message.role == "user"
+                    else AIMessage(content=message.content, id=message.id)
+                    for message in saved_messages
+                ]
         control = ExecutionControl(control_state["deadline"])
         current = asyncio.current_task()
         if current is None:
@@ -263,7 +283,7 @@ class AgentApplication:
             run.transition(RunStatus.PREPARING)
 
             inputs: _ExecutionInput = {
-                "messages": [HumanMessage(content=task, id=run.id + "_user")],
+                "messages": inputs_messages,
                 "run_control": control_state,
             }
             run.transition(RunStatus.THINKING)
@@ -439,6 +459,8 @@ class AgentApplication:
             if on_status:
                 on_status(deepcopy(runtime.board))
         self._save(run)
+        if self.history is not None:
+            self.history.finish(run)
 
     async def _close_run(self, config: RunnableConfig, control: RunControlState) -> None:
         """保存终止标记、补齐被中断的工具结果，并用官方接口清除待执行节点。"""

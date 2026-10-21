@@ -50,6 +50,7 @@ uv run workstation-agent serve-agent
 
 默认地址 `http://127.0.0.1:8766`。该服务启用会话保存；提交、查询、取消和审批恢复见
 [Agent HTTP 服务](docs/agent-service.md)。
+会话更名、删除和历史消息管理见 [会话与消息接口](docs/conversations.md)。
 
 ## 文档检索
 

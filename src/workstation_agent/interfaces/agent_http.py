@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Annotated, Literal, TypedDict
+from typing import Literal, TypedDict
 
 import uvicorn
 from pydantic import (
-    BaseModel, ConfigDict, Field, JsonValue, StringConstraints, TypeAdapter, ValidationError,
+    BaseModel, JsonValue, TypeAdapter, ValidationError,
 )
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -20,43 +21,26 @@ from starlette.types import ASGIApp
 from .. import __version__
 from ..application.agent_service import AgentServiceApplication, AgentServiceError, ServiceRun
 from ..application.service import AgentApplication
-from ..bootstrap import build_agent_application
+from ..application.conversations import ConversationApplication
+from ..api.conversations import CreateSession, RenameSession, WriteMessage, PageRequest, Page, SessionId
+from ..api.runs import SubmitTask, ResumeTask
+from ..domain.conversations import Conversation, ConversationMessage
+from ..bootstrap import build_agent_application, build_conversation_application
 from ..config import Settings
 from ..memory.service import redact
+from ..tools.contracts import ToolError
 from .access import LocalAccessMiddleware
 
 type ApplicationFactory = Callable[[], AbstractAsyncContextManager[AgentApplication]]
-type SessionId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]{1,128}$")]
 _SESSION = TypeAdapter(SessionId)
 _RUN = TypeAdapter(ServiceRun)
-
-
-class SubmitTask(BaseModel):
-    """仅接受任务和会话信息，调用方不能覆盖工作区、模型地址或权限配置。"""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-    task: str = Field(min_length=1, max_length=32_000, pattern=r"\S")
-    session_id: SessionId | None = None
-    constraints: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(
-        default_factory=list, max_length=32
-    )
-    criteria: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(
-        default_factory=list, max_length=32
-    )
-    new_task: bool = False
-
-
-class ResumeTask(BaseModel):
-    """提交全部待审批项的决定，授权参数仍取自可信检查点。"""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-    decisions: dict[str, Literal["approve", "reject"]] = Field(min_length=1, max_length=32)
 
 
 class ServiceState(TypedDict):
     """以官方生命周期状态向路由提供带类型的应用实例。"""
 
     agent: AgentServiceApplication
+    conversations: ConversationApplication
 
 
 async def _parse[T: BaseModel](request: Request[ServiceState], model: type[T]) -> T:
@@ -99,9 +83,11 @@ def build_agent_service(
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[ServiceState]:
         async with factory() as application:
+            conversations = build_conversation_application(settings)
+            application.history = conversations
             manager = AgentServiceApplication(application)
             try:
-                yield {"agent": manager}
+                yield {"agent": manager, "conversations": conversations}
             finally:
                 await manager.close()
 
@@ -111,6 +97,76 @@ def build_agent_service(
     def run_response(run: ServiceRun, status: int = 200) -> JSONResponse:
         value = TypeAdapter(JsonValue).validate_json(_RUN.dump_json(run))
         return response(value, status)
+
+    def typed_response[T](value: T, adapter: TypeAdapter[T], status: int = 200) -> JSONResponse:
+        return response(TypeAdapter(JsonValue).validate_json(adapter.dump_json(value)), status)
+
+    def page(request: Request[ServiceState]) -> PageRequest:
+        try:
+            return PageRequest.model_validate(dict(request.query_params))
+        except ValidationError:
+            raise HTTPException(422, "分页参数无效") from None
+
+    def revision(request: Request[ServiceState]) -> int:
+        try:
+            value = int(request.query_params["revision"])
+            if value < 0 or set(request.query_params) != {"revision"}:
+                raise ValueError
+            return value
+        except (KeyError, ValueError):
+            raise HTTPException(422, "请提供非负整数 revision") from None
+
+    async def create_session(request: Request[ServiceState]) -> JSONResponse:
+        data = await _parse(request, CreateSession)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].create(data))
+        return typed_response(result, TypeAdapter(Conversation), 201)
+
+    async def list_sessions(request: Request[ServiceState]) -> JSONResponse:
+        data = page(request)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].list_sessions(data))
+        return typed_response(result, TypeAdapter(Page[Conversation]))
+
+    async def get_session(request: Request[ServiceState]) -> JSONResponse:
+        session_id = session(request)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].get(session_id))
+        return typed_response(result, TypeAdapter(Conversation))
+
+    async def rename_session(request: Request[ServiceState]) -> JSONResponse:
+        session_id, data = session(request), await _parse(request, RenameSession)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].rename(session_id, data))
+        return typed_response(result, TypeAdapter(Conversation))
+
+    async def delete_session(request: Request[ServiceState]) -> JSONResponse:
+        session_id, version = session(request), revision(request)
+        await asyncio.to_thread(lambda: request.state["conversations"].delete(session_id, version))
+        return response({"deleted": session_id})
+
+    async def list_messages(request: Request[ServiceState]) -> JSONResponse:
+        session_id, data = session(request), page(request)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].list_messages(session_id, data))
+        return typed_response(result, TypeAdapter(Page[ConversationMessage]))
+
+    async def get_message(request: Request[ServiceState]) -> JSONResponse:
+        session_id, message_id = session(request), request.path_params["message_id"]
+        result = await asyncio.to_thread(lambda: request.state["conversations"].get_message(session_id, message_id))
+        return typed_response(result, TypeAdapter(ConversationMessage))
+
+    async def add_message(request: Request[ServiceState]) -> JSONResponse:
+        session_id, data = session(request), await _parse(request, WriteMessage)
+        result = await asyncio.to_thread(lambda: request.state["conversations"].add_message(session_id, data))
+        return typed_response(result, TypeAdapter(ConversationMessage), 201)
+
+    async def edit_message(request: Request[ServiceState]) -> JSONResponse:
+        session_id, data = session(request), await _parse(request, WriteMessage)
+        message_id: str = request.path_params["message_id"]
+        result = await asyncio.to_thread(lambda: request.state["conversations"].edit_message(session_id, message_id, data))
+        return typed_response(result, TypeAdapter(ConversationMessage))
+
+    async def delete_message(request: Request[ServiceState]) -> JSONResponse:
+        session_id, version = session(request), revision(request)
+        message_id: str = request.path_params["message_id"]
+        await asyncio.to_thread(lambda: request.state["conversations"].delete_message(session_id, message_id, version))
+        return response({"deleted": message_id, "following_messages_deleted": True})
 
     def session(request: Request[ServiceState]) -> str:
         try:
@@ -155,11 +211,32 @@ def build_agent_service(
             return response({"error": exc.code, "message": str(exc)}, exc.status)
         if isinstance(exc, HTTPException):
             return response({"error": "invalid_request", "message": str(exc.detail)}, exc.status_code)
+        if isinstance(exc, ToolError):
+            errors = {
+                "not_found": (404, "会话或消息不存在"),
+                "revision_conflict": (409, "会话已变化，请重新读取后修改"),
+                "session_busy": (409, "会话正在运行或等待审批，请先结束运行"),
+                "message_read_only": (409, "只能编辑用户消息"),
+                "database_not_configured": (503, "数据库未配置"),
+                "database_failed": (503, "数据库操作暂不可用"),
+            }
+            status, message = errors.get(exc.code, (500, "会话操作失败"))
+            return response({"error": exc.code if exc.code in errors else "internal_error", "message": message}, status)
         return response({"error": "internal_error", "message": "服务操作失败"}, 500)
 
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
+            Route("/sessions", create_session, methods=["POST"]),
+            Route("/sessions", list_sessions, methods=["GET"]),
+            Route("/sessions/{session_id}", get_session, methods=["GET"]),
+            Route("/sessions/{session_id}", rename_session, methods=["PATCH"]),
+            Route("/sessions/{session_id}", delete_session, methods=["DELETE"]),
+            Route("/sessions/{session_id}/messages", list_messages, methods=["GET"]),
+            Route("/sessions/{session_id}/messages", add_message, methods=["POST"]),
+            Route("/sessions/{session_id}/messages/{message_id}", get_message, methods=["GET"]),
+            Route("/sessions/{session_id}/messages/{message_id}", edit_message, methods=["PATCH"]),
+            Route("/sessions/{session_id}/messages/{message_id}", delete_message, methods=["DELETE"]),
             Route("/runs", submit, methods=["POST"]),
             Route("/runs", listing, methods=["GET"]),
             Route("/runs/{run_id}", get, methods=["GET"]),
@@ -168,7 +245,7 @@ def build_agent_service(
             Route("/sessions/{session_id}/resume", resume, methods=["POST"]),
         ],
         lifespan=lifespan, max_body_size=65_536,
-        exception_handlers={AgentServiceError: service_error, HTTPException: service_error,
+        exception_handlers={AgentServiceError: service_error, HTTPException: service_error, ToolError: service_error,
                             Exception: service_error},
     )
     return LocalAccessMiddleware(

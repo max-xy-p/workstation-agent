@@ -12,6 +12,7 @@ from pydantic import JsonValue
 from .application import AgentApplication, ToolApplication
 from .application.memory import MemoryApplication
 from .application.sessions import SessionApplication
+from .application.conversations import ConversationApplication
 from .config import Settings
 from .memory.models import MemoryRecord
 from .memory.service import MemoryService
@@ -180,7 +181,36 @@ def build_session_application(settings: Settings, *, approve_delete: bool = Fals
         settings.memory_access,
         MemoryApprovalPolicy(delete=approve_delete),
     )
-    return SessionApplication(saver)
+    return SessionApplication(saver, history=build_conversation_application(settings, approve_delete=approve_delete))
+
+
+class ConversationPolicy(MemoryApprovalPolicy):
+    """只向可信应用调用方授权会话管理，不向模型增加可发现工具。"""
+
+    def __init__(self, *, approve_delete: bool = True) -> None:
+        super().__init__(sessions=True, delete=approve_delete)
+
+    def allows(self, tool_name: str, permission: PermissionLevel, arguments: dict[str, JsonValue]) -> bool:
+        return super().allows(tool_name, permission, arguments) or (
+            tool_name == "conversation_write" and permission == PermissionLevel.CONTROLLED_WRITE
+        ) or (
+            self.delete and tool_name == "conversation_delete" and permission == PermissionLevel.DESTRUCTIVE
+        )
+
+
+def build_conversation_application(settings: Settings, *, approve_delete: bool = True) -> ConversationApplication:
+    """组装当前身份的会话管理用例，不连接数据库，也不构造模型。"""
+    from .storage.postgres.checkpoints import PostgresSessionBackend
+    from .storage.postgres.conversations import PostgresConversationRepository
+    from .tools.checkpoints import AuthorizedCheckpointer
+
+    policy = ConversationPolicy(approve_delete=approve_delete)
+    secrets = (settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url)
+    return ConversationApplication(
+        PostgresConversationRepository(database_for(settings), settings.memory_access.scope().namespace),
+        AuthorizedCheckpointer(PostgresSessionBackend(database_for(settings), secrets=secrets), settings.memory_access, policy),
+        policy, secrets=secrets,
+    )
 
 
 def build_infrastructure(settings: Settings) -> Infrastructure:
@@ -388,6 +418,7 @@ async def build_agent_application(
             checkpointer=checkpointer,
             extraction=extraction,
             run_timeout=settings.run_timeout,
+            history=build_conversation_application(settings) if checkpointer is not None else None,
         )
 
     if transport == "mcp":

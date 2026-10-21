@@ -57,6 +57,13 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/api",
+    "src/workstation_agent/domain/conversations.py",
+    "src/workstation_agent/application/conversations.py",
+    "src/workstation_agent/application/sessions.py",
+    "src/workstation_agent/tools/checkpoints.py",
+    "src/workstation_agent/bootstrap.py",
+    "tests/integration/test_conversations.py",
     "src/workstation_agent/retrieval",
     "src/workstation_agent/memory/retrieval.py",
     "src/workstation_agent/memory/service.py",

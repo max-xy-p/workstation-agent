@@ -51,6 +51,7 @@ uv run workstation-agent doctor --database
 | 数据 | 保存位置 | 管理方式 |
 | --- | --- | --- |
 | Run 与步骤摘要 | `workstation.runs` | 运行与步骤作为一个 JSONB 结果保存；当前仍需显式注入 Repository |
+| 会话与文本历史 | `workstation.conversations`、`conversation_messages` | 标题、版本号及用户/助手文本，按可信用户、工作区和项目隔离；见 [会话管理](conversations.md) |
 | 长期记忆正文 | `workstation.memory_records.content` | 正文保存在 TEXT 列，来源等元数据使用 JSONB |
 | 记忆版本与提取批次 | `workstation.memory_scopes`、`memory_batches` | 版本冲突、整批回滚和遗忘保护 |
 | RAG 文档、分块和向量快照 | `workstation.rag_documents` | 按来源发布 JSONB 快照，继续使用现有官方检索组件 |
@@ -69,6 +70,7 @@ HTTP 服务的最近运行列表仍在内存中保存；换数据库本身不等
 ## 迁移和旧数据
 
 `005_postgresql.sql` 是建立 PostgreSQL 业务表的版本化迁移脚本，由 `workstation.migrations` 记录版本 5。
+`006_conversations.sql` 新增会话及文本消息表，记录版本 6；初始化按版本顺序检查，仅执行尚未执行的迁移。
 首次获准写入业务数据时也会自动检查迁移；只读查询不创建 schema 或表。
 历史 `001`–`004` SQL 文件保留用于说明旧 SQLite 结构，PostgreSQL 初始化不会执行它们。
 官方检查点迁移独立记录在 `workstation_checkpoints.checkpoint_migrations` 中，由官方组件执行。

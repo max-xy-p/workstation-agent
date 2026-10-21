@@ -34,6 +34,7 @@ class AuthorizedCheckpointer(BaseCheckpointSaver):
         self.backend: SessionBackend = backend
         self.access: MemoryAccess = access
         self.policy: ApprovalPolicy = policy
+        self._held_threads: set[str] = set()
 
     def config(self, session_id: str) -> RunnableConfig:
         """外部会话名映射为当前身份和范围内的 thread_id。"""
@@ -110,20 +111,28 @@ class AuthorizedCheckpointer(BaseCheckpointSaver):
             lambda: self.backend.acquire(config.get("configurable", {})["thread_id"]),
         )
         try:
+            thread_id: str = config.get("configurable", {})["thread_id"]
+            self._held_threads.add(thread_id)
             yield
         finally:
+            self._held_threads.discard(config.get("configurable", {})["thread_id"])
             # 释放自己已经持有的句柄不需要重新询问权限，避免策略变化导致锁无法释放。
             handle.close()
 
     def delete_thread(self, thread_id: str) -> None:
         """持有会话锁后删除当前 thread_id 的检查点。"""
         with self.lease({"configurable": {"thread_id": thread_id}}, deleting=True):
-            authorized_operation(
-                "session_delete_thread",
-                PermissionLevel.DESTRUCTIVE,
-                self.policy,
-                lambda: self.backend.delete_thread(thread_id),
-            )
+            self.reset_locked({"configurable": {"thread_id": thread_id}})
+
+    def reset_locked(self, config: RunnableConfig) -> None:
+        """清除已由本实例锁住的会话，供历史修改组合用例使用；未持锁时拒绝执行。"""
+        thread_id: str = config.get("configurable", {})["thread_id"]
+        if thread_id not in self._held_threads:
+            raise RuntimeError("清除检查点前必须持有会话锁")
+        authorized_operation(
+            "session_delete_thread", PermissionLevel.DESTRUCTIVE, self.policy,
+            lambda: self.backend.delete_thread(thread_id),
+        )
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """在线程中调用有完整类型的同步 get_tuple 方法。"""

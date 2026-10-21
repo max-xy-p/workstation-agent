@@ -81,7 +81,7 @@ Invoke-RestMethod "$base/runs/$($run.id)" -Headers $headers
 服务一次执行一个任务，执行期间提交或恢复其他任务返回 409，不会排队。
 运行期间查询审批同样返回 409，避免读取尚未稳定的检查点；运行查询始终可用。
 同一个会话有待审批操作时，不能提交新任务覆盖它。
-自动生成的会话 ID 会在提交响应中返回；手工指定的会话 ID 允许 1–128 个字母、数字、点、下划线和连字符。
+自动生成的会话 ID 会在提交响应中返回；手工指定的会话 ID 允许 1–128 个字母、数字、下划线和连字符。
 任务正文最多 32000 个字符，单个请求正文最多 65536 字节；超出字节上限返回 413。
 
 ## 审批和恢复
@@ -106,6 +106,9 @@ Invoke-RestMethod "$base/sessions/demo/resume" -Method Post -Headers $headers `
 
 ## 保留范围和当前限制
 
+会话标题、用户文本和最终答复已保存到 PostgreSQL，重启后仍可通过 [会话与消息 CRUD](conversations.md) 读取。
+消息编辑与删除会清除后续文本及检查点；运行中或等待审批时禁止修改历史。
+
 运行记录只在当前进程内保留，最多 128 条；容量不足时删除最早结束的记录。
 待审批记录不会自动淘汰，全部容量被待审批项占用时，新任务返回 503，恢复已有审批仍然可用。
 这份列表不是任务历史数据库，进程重启后旧 Run ID 查询返回 404。
@@ -124,7 +127,8 @@ Invoke-RestMethod "$base/sessions/demo/resume" -Method Post -Headers $headers `
 服务复用已依赖的 Starlette、Uvicorn、Pydantic 和官方 Agent，不新增依赖。
 [Starlette 生命周期接口](https://starlette.dev/lifespan/) 管理应用及 MCP 连接的打开和关闭，
 官方请求正文大小限制处理超限请求，Pydantic 处理输入校验。
-HTTP 路由仅调用 `application/agent_service.py` 的任务用例，工具和副作用仍经过原 `ToolExecutor`。
+HTTP 路由调用 `application/agent_service.py` 的任务用例及 `application/conversations.py` 的会话用例，
+通用请求契约位于 `api/`，工具和存储副作用仍经过原 `ToolExecutor`。
 
 官方 Agent 已提供任务执行、审批恢复与取消，尚不负责本项目 HTTP 请求对应的活动任务句柄和限量查询记录。
 因此自定义范围仅为一个 `asyncio.Task` 的保留、进度副本和 HTTP 数据转换；没有自行实现模型循环、检查点或持久任务队列。

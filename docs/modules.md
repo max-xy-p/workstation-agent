@@ -7,8 +7,8 @@
 | Agent Core | 官方框架运行链可用 | create_agent / LangGraph，官方模型和工具调用限制、可选官方 PostgreSQL 会话、摘要/裁剪、可恢复审批、整次运行时间限制与取消 | 外部模型和实际任务验收 |
 | Model | OpenAI 兼容适配器可用 | 官方 ChatOpenAI，model/base_url/API key/超时配置、上下文容量与输出限制、服务端 usage 记录，HTTP 接口验收 | 外部模型实际能力验收、计量偏差校准 |
 | Tools | 只读及 RAG 受控写入可用 | StructuredTool、MCP/同进程、校验权限、RAG 摄取/删除与模型出站授权、按版本分段读取文件 | 通用文件写入、更多文档格式 |
-| Application | 任务执行与常驻服务入口可用 | 异步 run_task、Context 组装、节点进度、结果状态、异常脱敏、取消 API 与审批恢复；单任务服务句柄和最多 128 条进程内运行记录 | 持久任务历史与运行记录查询扩展 |
-| Interfaces | CLI、本机 MCP 与 Agent HTTP 可用 | 自然语言 run、工具发现、serve、审批查看/恢复、任务项验收、Windows 启动脚本；serve-agent 提交、查询、取消和按会话恢复审批 | 用户界面、事件订阅；见 [Agent 服务](agent-service.md) |
+| Application | 任务执行、会话及文本历史管理可用 | 异步 run_task、Context 组装、节点进度、取消与审批恢复；会话和消息 CRUD、版本校验、历史修改后的检查点重建；最多 128 条进程内运行记录 | 持久运行记录查询扩展 |
+| Interfaces | CLI、本机 MCP 与 Agent HTTP 可用 | 自然语言 run、工具发现、serve、审批查看/恢复、任务项验收；serve-agent 运行入口、会话与消息 HTTP CRUD；通用请求契约放在 api | 用户界面、事件订阅；见 [会话管理](conversations.md) |
 | Safety | 基础 | 四级权限，默认只读，参数绑定审批与恢复、整次任务超时和协作取消 | 敏感内容识别与过滤 |
 | Domain | 业务对象可用 | Run/Step 结果摘要，与框架内部消息和状态分离 | 显式状态转换规则 |
 | Context | 统一请求管理可用 | 完整请求预算、分级压缩、有界记忆刷新、来源引用、AgentState 任务状态栏、按预算选择状态、用户版本化验收及状态回调 | 外部模型质量与计数误差校准；见 [使用说明](context.md) |
