@@ -16,6 +16,7 @@ flowchart LR
 ```
 
 `serve` 运行在本仓库中，只承担工作站能力服务。Agent 的模型调用、规划和对话可以留在另一个进程或项目。
+本仓库也提供 `serve-agent` 启动完整 Agent 进程，提交与管理任务的 HTTP 接口见 [Agent 服务](agent-service.md)。
 MCP 接口不会复制 Agent 逻辑，也不会直接读取文件；发现调用 Application，执行通过现有图和执行器。
 新增工具注册到现有工具集合后，CLI 与 MCP 使用相同参数 schema、权限策略和结果契约。
 

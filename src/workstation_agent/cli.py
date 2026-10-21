@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory", action="store_true", help="check memory storage and extraction settings"
     )
     doctor.add_argument("--agent", action="store_true", help="check model and MCP configuration")
+    doctor.add_argument("--http", action="store_true", help="check independent Agent service configuration")
     run = subparsers.add_parser("run", help="run a task with the official LangChain agent")
     run.add_argument("task")
     run.add_argument("--session", help="persist and continue this session ID")
@@ -69,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (approvals, resume, confirm):
         command.add_argument("--transport", choices=("mcp", "local"), default="mcp")
     subparsers.add_parser("serve", help="start the local MCP workstation service")
+    agent_service = subparsers.add_parser("serve-agent", help="start the local Agent HTTP service")
+    agent_service.add_argument("--transport", choices=("mcp", "local"), default="mcp")
     tools = subparsers.add_parser("tools", help="list tools and their argument schemas")
     tools.add_argument("--json", action="store_true", help="print schemas and permissions as JSON")
     tool = subparsers.add_parser("tool", help="execute a tool through validation and permissions")
@@ -168,6 +171,8 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
     print(f"mcp: {version('mcp')}")
     print(f"service endpoint: {settings.service_url}")
     print(f"service token: {'configured' if settings.service_token else '(not configured)'}")
+    print(f"Agent HTTP endpoint: {settings.agent_service_url}")
+    print(f"Agent HTTP token: {'configured' if settings.agent_service_token else '(not configured)'}")
     ready = settings.workspace.is_dir() and (not args.service or bool(settings.service_token))
     print(f"model base URL: {settings.model_base_url}")
     print(f"model API key: {'configured' if settings.api_key else '(not configured)'}")
@@ -177,8 +182,15 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
     print(f"max tool calls: {settings.max_tool_calls}")
     ready = _doctor_rag(args, settings) and ready
     ready = _doctor_memory(args, settings) and ready
-    if args.agent:
-        ready = _doctor_agent(settings) and ready
+    if args.agent or args.http:
+        ready = _doctor_agent(settings, require_mcp=args.agent) and ready
+    if args.http:
+        ready = bool(settings.agent_service_token) and ready
+        print("Agent HTTP sessions: enabled by serve-agent")
+        if settings.agent_service_port == settings.service_port:
+            print("Agent HTTP and MCP services require distinct ports when used together")
+            if args.agent:
+                ready = False
     return 0 if ready else 1
 
 
@@ -267,10 +279,12 @@ def _doctor_memory(args: argparse.Namespace, settings: Settings) -> bool:
     return ready
 
 
-def _doctor_agent(settings: Settings) -> bool:
+def _doctor_agent(settings: Settings, *, require_mcp: bool = True) -> bool:
     """校验模型、连接和上下文容量，不发送探测请求。"""
     ready = True
-    ready = ready and bool(settings.model and settings.api_key and settings.service_token)
+    ready = ready and bool(settings.model and settings.api_key)
+    if require_mcp:
+        ready = ready and bool(settings.service_token)
     try:
         from .context.budget import resolve_settings
         from .models.providers.openai import build_chat_model
@@ -505,6 +519,32 @@ def _run(args: argparse.Namespace, settings: Settings) -> int:
     return _run_exit_code(result.status.value)
 
 
+def _serve_agent(args: argparse.Namespace, settings: Settings) -> int:
+    """启动 Agent 常驻服务；显式启动即授权本机工作区内的会话保存。"""
+    from .interfaces.agent_http import run_agent_service
+
+    if not settings.workspace.is_dir() or not settings.agent_service_token:
+        print("serve-agent requires a workspace and WORKSTATION_AGENT_HTTP_TOKEN", file=sys.stderr)
+        return 2
+    if not _doctor_agent(settings, require_mcp=args.transport == "mcp"):
+        print("Agent service configuration is incomplete", file=sys.stderr)
+        return 2
+    if args.transport == "mcp" and settings.agent_service_port == settings.service_port:
+        print("Agent HTTP and MCP services require distinct ports", file=sys.stderr)
+        return 2
+    print(f"Agent HTTP service: {settings.agent_service_url}", flush=True)
+    try:
+        run_agent_service(settings, transport=args.transport)
+    except SystemExit as exc:
+        if exc.code:
+            print("Agent service startup failed; check configuration and tool service", file=sys.stderr)
+        return 1 if exc.code else 0
+    except Exception:
+        print("Agent service startup failed; check model, workspace and tool service", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _serve(settings: Settings) -> int:
     """校验本机监听配置，启动 MCP 工具服务并传播退出信号。"""
     from .interfaces.mcp_server import run_local_service
@@ -602,6 +642,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run(args, settings)
         case "serve":
             return _serve(settings)
+        case "serve-agent":
+            return _serve_agent(args, settings)
         case "tools":
             return _tools(args, settings)
         case "tool":

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import secrets
 
 import uvicorn
 from mcp.server import Server, ServerRequestContext
@@ -18,11 +17,10 @@ from mcp.types import (
     ToolAnnotations,
 )
 from pydantic import TypeAdapter
-from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp
 
 from .. import __version__
 from ..application.tools import ToolApplication
@@ -30,6 +28,7 @@ from ..config import Settings
 from ..domain.execution import ExecutionControl
 from ..tools import ToolResult
 from ..tools.execution import EXECUTION, ToolGrant, approved_call, execute_blocking
+from .access import LocalAccessMiddleware
 
 _RESULT = TypeAdapter(ToolResult)
 
@@ -90,34 +89,6 @@ def build_mcp_server(application: ToolApplication) -> Server:
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
-
-
-class LocalAccessMiddleware:
-    """在解析请求前检查访问地址、来源和认证令牌。"""
-
-    def __init__(self, app: ASGIApp, *, token: str, port: int) -> None:
-        self.app = app
-        self._credential = ("Bearer " + token).encode("ascii")
-        self._hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        self._origins = {f"http://{host}" for host in self._hosts}
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            headers = Headers(scope=scope)
-            status = None
-            if headers.get("host") not in self._hosts:
-                status = 421
-            elif headers.get("origin") is not None and headers["origin"] not in self._origins:
-                status = 403
-            elif scope["path"] != "/health":
-                credential = headers.get("authorization", "").encode("latin-1")
-                if not secrets.compare_digest(credential, self._credential):
-                    status = 401
-            if status is not None:
-                response = JSONResponse({"error": "request denied"}, status_code=status)
-                await response(scope, receive, send)
-                return
-        await self.app(scope, receive, send)
 
 
 def build_local_service(application: ToolApplication, settings: Settings) -> ASGIApp:

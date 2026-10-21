@@ -43,6 +43,10 @@ class Settings:
     service_port: int = 8765
     # 本机工具服务的认证令牌，打印配置对象时隐藏。
     service_token: str | None = field(default=None, repr=False)
+    # 独立 Agent HTTP 服务端口，与 MCP 工具服务分开监听。
+    agent_service_port: int = 8766
+    # HTTP 调用方可提交任务和审批，使用独立凭据且不打印原文。
+    agent_service_token: str | None = field(default=None, repr=False)
 
     # RAG 模型与资源预算，默认不向外发送文档。
     rag: RagSettings = field(default_factory=RagSettings)
@@ -112,11 +116,22 @@ class Settings:
             r"[A-Za-z0-9_-]{32,256}", self.service_token
         ):
             raise ValueError("WORKSTATION_AGENT_SERVICE_TOKEN must be 32-256 URL-safe characters")
+        if type(self.agent_service_port) is not int or not 1 <= self.agent_service_port <= 65535:
+            raise ValueError("WORKSTATION_AGENT_HTTP_PORT must be between 1 and 65535")
+        if self.agent_service_token is not None and not re.fullmatch(
+            r"[A-Za-z0-9_-]{32,256}", self.agent_service_token
+        ):
+            raise ValueError("WORKSTATION_AGENT_HTTP_TOKEN must be 32-256 URL-safe characters")
 
     @property
     def service_url(self) -> str:
         """返回本机 MCP 工具服务地址。"""
         return f"http://127.0.0.1:{self.service_port}/mcp"
+
+    @property
+    def agent_service_url(self) -> str:
+        """返回本机 Agent HTTP 服务地址。"""
+        return f"http://127.0.0.1:{self.agent_service_port}"
 
     @property
     def database_path(self) -> Path:
@@ -149,6 +164,10 @@ class Settings:
         except ValueError as exc:
             raise ValueError("WORKSTATION_AGENT_SERVICE_PORT must be an integer") from exc
         try:
+            agent_service_port = int(os.getenv("WORKSTATION_AGENT_HTTP_PORT", "8766"))
+        except ValueError:
+            raise ValueError("WORKSTATION_AGENT_HTTP_PORT must be an integer") from None
+        try:
             model_timeout = float(os.getenv("WORKSTATION_AGENT_MODEL_TIMEOUT", "30"))
             run_timeout = float(os.getenv("WORKSTATION_AGENT_RUN_TIMEOUT", "300"))
             max_tool_calls = int(os.getenv("WORKSTATION_AGENT_MAX_TOOL_CALLS", "32"))
@@ -167,6 +186,8 @@ class Settings:
             max_tool_calls=max_tool_calls,
             service_port=service_port,
             service_token=os.getenv("WORKSTATION_AGENT_SERVICE_TOKEN") or None,
+            agent_service_port=agent_service_port,
+            agent_service_token=os.getenv("WORKSTATION_AGENT_HTTP_TOKEN") or None,
             rag=RagSettings.from_env(),
             memory=MemorySettings.from_env(),
             context=ContextSettings.from_env(),

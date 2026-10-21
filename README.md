@@ -36,6 +36,17 @@ uv run workstation-agent serve
 内置目录列举和 UTF-8 文件读取，工具路径受工作区限制。`serve` 前台启动需要服务令牌。
 默认地址 `http://127.0.0.1:8765/mcp`。详细说明见[工具模块](docs/tools.md)与[本机服务](docs/local-service.md)。
 
+需要通过 HTTP 提交和管理完整 Agent 任务时，配置独立令牌并启动常驻服务：
+
+```powershell
+$env:WORKSTATION_AGENT_HTTP_TOKEN = [guid]::NewGuid().ToString('N')
+uv run workstation-agent doctor --http --agent
+uv run workstation-agent serve-agent
+```
+
+默认地址 `http://127.0.0.1:8766`。该服务启用会话保存；提交、查询、取消和审批恢复见
+[Agent HTTP 服务](docs/agent-service.md)。
+
 ## 文档检索
 
 ~~~powershell

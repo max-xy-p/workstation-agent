@@ -164,6 +164,7 @@ class AgentApplication:
         *,
         on_node: Callable[[str], None] | None = None,
         on_status: Callable[[TaskBoard], None] | None = None,
+        on_started: Callable[[str], None] | None = None,
     ) -> Run:
         """用户决定必须覆盖当前全部中断，恢复时保留原运行身份和截止时间。"""
         config = self._config(session_id)
@@ -202,6 +203,7 @@ class AgentApplication:
                     on_status,
                     resume=Command(resume=answers),
                     saved_control=control,
+                    on_started=on_started,
                 )
 
     async def confirm_status(

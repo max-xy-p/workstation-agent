@@ -60,6 +60,13 @@ uv build
 uv run pyright
 ```
 
+独立 Agent HTTP 服务的路由、任务用例、访问检查和直接调用方已加入类型检查清单。
+服务结构与框架选择见 [Agent HTTP 服务](agent-service.md)，本模块回归可运行：
+
+```powershell
+uv run python -m unittest tests.integration.test_agent_http -v
+```
+
 当前检查检索与分块协议、默认策略、分块结果校验、记忆服务、RAG 用例、证据组装、工具协议、
 应用组装入口、直接工具调用方及新增策略测试。具体文件以配置中的 include 清单为准。
 旧模块尚未全部纳入静态检查；后续新增或重构模块时，必须将该模块和直接调用方加入清单，

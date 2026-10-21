@@ -118,7 +118,7 @@ def _memory_service(
         ),
         retrieval=retrieval if retrieval is not None else MemoryRetrievalStrategy(),
         max_records=settings.memory.max_records,
-        secrets=(settings.api_key, settings.service_token),
+        secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
     )
 
 
@@ -158,7 +158,7 @@ def build_session_application(settings, *, approve_delete=False):
         SQLiteSessionBackend(
             settings.session_database_path,
             settings.workspace,
-            secrets=(settings.api_key, settings.service_token),
+            secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
         ),
         settings.memory_access,
         MemoryApprovalPolicy(delete=approve_delete),
@@ -335,7 +335,7 @@ async def build_agent_application(
             SQLiteSessionBackend(
                 settings.session_database_path,
                 settings.workspace,
-                secrets=(settings.api_key, settings.service_token),
+                secrets=(settings.api_key, settings.service_token, settings.agent_service_token),
             ),
             settings.memory_access,
             policy,

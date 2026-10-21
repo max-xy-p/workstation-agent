@@ -11,6 +11,7 @@ uv run workstation-agent run "读取 .python-version 并解释项目需要的 Py
 ```
 
 默认通过 MCP 调用独立本机工具服务；`--transport local` 可在同进程使用相同权限执行器。
+需要常驻运行并通过 HTTP 提交、查询、取消或恢复任务时，使用 [Agent HTTP 服务](agent-service.md)。
 配置和启动命令见 [README](../README.md) 与 [本机服务](local-service.md)。
 模型服务必须支持 OpenAI 兼容的 `/chat/completions` 和工具调用。
 

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from tempfile import TemporaryFile
+from typing import ClassVar
+
+import httpx2
+from pydantic import TypeAdapter
+
+from workstation_agent.application.agent_service import ServiceRun
 
 from tests.integration import test_local_service as service_fixture
 
@@ -54,6 +64,11 @@ class CompatibleAPIHandler(BaseHTTPRequestHandler):
 
 
 class FrameworkAgentIntegrationTests(unittest.TestCase):
+    # 下列字段由复用的本机服务夹具在类初始化时填入，声明类型便于检查调用方。
+    env: ClassVar[dict[str, str]]
+    workspace: ClassVar[Path]
+    secret: ClassVar[str]
+
     @classmethod
     def stop_server(cls):
         service_fixture.LocalServiceIntegrationTests.stop_server.__func__(cls)
@@ -109,6 +124,69 @@ class FrameworkAgentIntegrationTests(unittest.TestCase):
         process = self.cli("读取 hello.txt", transport="local")
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(json.loads(process.stdout)["answer"], "你好，本机服务")
+
+    def test_independent_agent_http_process_uses_sdk_and_mcp(self) -> None:
+        """真实启动 Agent 进程，经 HTTP 提交任务，再通过独立 MCP 服务读取文件。"""
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        token = "http_process_test_" + "x" * 32
+        environment = {
+            **self.env, "WORKSTATION_AGENT_HTTP_PORT": str(port),
+            "WORKSTATION_AGENT_HTTP_TOKEN": token,
+            "WORKSTATION_AGENT_DATA_DIR": str(self.workspace / "http-state"),
+        }
+        with TemporaryFile() as output:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "workstation_agent", "serve-agent"],
+                env=environment, stdout=output, stderr=output,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                with httpx2.Client(
+                    base_url=f"http://127.0.0.1:{port}", trust_env=False, timeout=5,
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as client:
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        self.assertIsNone(process.poll(), "Agent 服务提前退出")
+                        try:
+                            if client.get("/health").status_code == 200:
+                                break
+                        except httpx2.TransportError:
+                            pass
+                        time.sleep(0.05)
+                    else:
+                        self.fail("Agent 服务未就绪")
+                    response = client.post("/runs", json={"task": "读取 hello.txt"})
+                    self.assertEqual(response.status_code, 202, response.text)
+                    run = TypeAdapter(ServiceRun).validate_json(response.content)
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        run = TypeAdapter(ServiceRun).validate_json(client.get(f"/runs/{run.id}").content)
+                        if run.status.value == "completed":
+                            break
+                        time.sleep(0.05)
+                    self.assertEqual(run.status.value, "completed", run.error)
+                    self.assertEqual(run.answer, "你好，本机服务")
+                    self.assertTrue(any(step.name == "read_text_file" for step in run.steps))
+                diagnostic = subprocess.run(
+                    [sys.executable, "-m", "workstation_agent", "doctor", "--http", "--agent"],
+                    env=environment, capture_output=True, text=True, encoding="utf-8", timeout=20,
+                )
+                self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
+                self.assertNotIn(token, diagnostic.stdout + diagnostic.stderr)
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            output.seek(0)
+            logs = output.read().decode("utf-8", errors="replace")
+            self.assertNotIn(token, logs)
+            self.assertNotIn("你好，本机服务", logs)
 
     def test_remote_parameter_and_path_errors_return_to_model(self):
         for task, code in [("缺失参数", "invalid_arguments"), ("越界", "path_outside_workspace")]:
