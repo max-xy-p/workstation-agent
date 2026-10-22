@@ -3,10 +3,11 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$pythonPath = Join-Path $repoRoot '.venv\Scripts\python.exe'
+$backendRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repoRoot = (Resolve-Path (Join-Path $backendRoot '..')).Path
+$pythonPath = Join-Path $backendRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
-    throw 'Run uv sync in the repository before starting the local service.'
+    throw 'Run uv sync in backend before starting the local service.'
 }
 if (-not $env:WORKSTATION_AGENT_WORKSPACE) {
     $env:WORKSTATION_AGENT_WORKSPACE = $repoRoot
@@ -34,7 +35,7 @@ try {
     $listener.Stop()
 }
 $serviceProcess = Start-Process -FilePath $pythonPath -ArgumentList '-m', 'workstation_agent', 'serve' `
-    -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
+    -WorkingDirectory $backendRoot -WindowStyle Hidden -PassThru
 $healthUrl = "http://127.0.0.1:$($env:WORKSTATION_AGENT_SERVICE_PORT)/health"
 $timer = [System.Diagnostics.Stopwatch]::StartNew()
 try {

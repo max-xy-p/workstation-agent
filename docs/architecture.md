@@ -5,6 +5,8 @@
 
 ## 模块与依赖
 
+前端是 `frontend/` 中的独立工程；下列 Python 模块均位于 `backend/src/workstation_agent/`。
+
 ```text
 CLI / HTTP / 后续通信适配器
   → api 请求契约 → application 用例
@@ -67,7 +69,7 @@ CLI / HTTP / 后续通信适配器
 检索协议显式接收已过滤候选并只返回 ID；分块协议补足原文、来源与签名要求，算法仍由成熟组件执行。
 
 维护范围是这些业务约束与框架扩展点的衔接，不维护另一套循环、驱动、协议或检索算法。
-直接依赖由 `pyproject.toml` 声明，实际版本由 `uv.lock` 固定。
+后端直接依赖由 `backend/pyproject.toml` 声明，实际版本由 `backend/uv.lock` 固定。
 使用内存精确检索会增加每次构建候选索引的 CPU 和内存开销，适合当前小型知识库；
 可选摘要、提取、embedding 和重排会增加模型调用、费用及延迟，按各自配置授权。
 

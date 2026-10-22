@@ -7,20 +7,24 @@
 需要 Python 3.13+、uv 和 PostgreSQL。先按 [数据库部署](docs/database.md) 配置连接并运行 `init-db`，再配置支持工具调用的 OpenAI 兼容模型：
 
 ```powershell
+cd backend
 uv sync
+$env:WORKSTATION_AGENT_WORKSPACE = (Resolve-Path ..).Path
 $env:WORKSTATION_AGENT_MODEL = '你的模型名称'
 $env:WORKSTATION_AGENT_BASE_URL = 'https://你的模型服务/v1'
 $env:WORKSTATION_AGENT_API_KEY = '你的密钥'
 # 替换为模型的真实上下文窗口。
 $env:WORKSTATION_AGENT_CONTEXT_WINDOW = '32768'
-uv run workstation-agent run "读取 .python-version，说明项目需要的 Python 版本" --transport local
+uv run workstation-agent run "读取 backend/.python-version，说明项目需要的 Python 版本" --transport local
 ```
 
-成功后输出包含 `status`、`answer` 和执行步骤的 JSON。项目不会自动读取 `.env`；配置示例见 [.env.example](.env.example)。
+以上命令从仓库根目录开始执行。成功后输出包含 `status`、`answer` 和执行步骤的 JSON。
+项目不会自动读取 `.env`；配置示例见 [后端配置](backend/.env.example)。
+示例将整个仓库设为 Agent 工作区；未配置 `WORKSTATION_AGENT_WORKSPACE` 时使用启动进程的当前目录。
 
 ## 打开工作台
 
-需要 Node.js 22.12+。先按 [HTTP 文档](docs/agent-service.md#启动与认证) 启动 Agent 服务，再在另一个终端运行：
+需要 Node.js 22.12+。先按 [HTTP 文档](docs/agent-service.md#启动与认证) 启动 Agent 服务，再在另一个终端从仓库根目录运行：
 
 ```powershell
 cd frontend
@@ -32,6 +36,9 @@ npm run dev
 也可选择页面演示，无需模型和数据库。前端启动、检查和目录说明见 [开发指南](docs/development.md#前端工作台)。
 
 ## 使用入口
+
+前端代码和 Node 配置在 `frontend/`；后端源码、测试、脚本和 Python 配置在 `backend/`。
+`docs/` 保存公共文档，根目录的 `compose.yaml` 提供 PostgreSQL 部署配置；详细目录见 [开发指南](docs/development.md#目录与命令位置)。
 
 | 需求 | 文档 |
 | --- | --- |

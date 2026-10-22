@@ -6,7 +6,7 @@
 ## 启动与认证
 
 先按 [README](../README.md) 配置模型与真实上下文窗口，按 [数据库部署](database.md) 配置 PostgreSQL 并执行 `init-db`。
-使用同进程工具时：
+在 `backend/` 目录使用同进程工具时：
 
 ```powershell
 $env:WORKSTATION_AGENT_HTTP_TOKEN = [guid]::NewGuid().ToString('N')
@@ -45,7 +45,7 @@ JSON 请求使用 `Content-Type: application/json`；项目不会自动读取 `.
 ```powershell
 $base = 'http://127.0.0.1:8766'
 $headers = @{ Authorization = "Bearer $env:WORKSTATION_AGENT_HTTP_TOKEN" }
-$body = @{ task = '读取 .python-version'; session_id = 'demo' } | ConvertTo-Json
+$body = @{ task = '读取 backend/.python-version'; session_id = 'demo' } | ConvertTo-Json
 $run = Invoke-RestMethod "$base/runs" -Method Post -Headers $headers `
     -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body))
 Invoke-RestMethod "$base/runs/$($run.id)" -Headers $headers

@@ -2,11 +2,12 @@
 
 Agent 执行自然语言任务，返回答复和执行结果。模型必须支持 OpenAI 兼容的 Chat Completions 与工具调用。
 先按 [README](../README.md) 配置模型、真实上下文窗口和 [PostgreSQL](database.md)。
+下列命令在 `backend/` 执行，文件工具的路径相对于配置的工作区。
 
 ## 执行任务
 
 ```powershell
-uv run workstation-agent run "读取 .python-version，说明项目需要的 Python 版本" --transport local --trace
+uv run workstation-agent run "读取 backend/.python-version，说明项目需要的 Python 版本" --transport local --trace
 ```
 
 `local` 在同进程使用工具；默认 `mcp` 模式需要先启动下面的独立工具服务。
@@ -35,7 +36,7 @@ stdout 为 Run JSON，包含 `id`、`session_id`、`status`、`answer` 和 `step
 | `RUN_TIMEOUT` | 300 | 整次任务限时秒数，包含审批等待、摘要与记忆提取 |
 | `SESSIONS_ENABLED` | false | 默认持久化会话；也可用 `--session` 单次启用 |
 
-模型客户端不自动重试，图不自动重试工具副作用。配置总表见 [.env.example](../.env.example)。
+模型客户端不自动重试，图不自动重试工具副作用。配置总表见 [后端配置示例](../backend/.env.example)。
 
 ## 会话续聊
 
@@ -103,8 +104,8 @@ RAG 和记忆工具的授权分别见其使用文档，通用文件写入与 She
 
 ```powershell
 $service = & .\scripts\start-local-service.ps1
-uv run python examples/local_agent_client.py read_text_file --path .python-version
-uv run workstation-agent run "读取 .python-version 并回答" --trace
+uv run python examples/local_agent_client.py read_text_file --path backend/.python-version
+uv run workstation-agent run "读取 backend/.python-version 并回答" --trace
 # 不再需要时停止本终端启动的服务。
 $service.Kill()
 $service.WaitForExit()
@@ -124,6 +125,6 @@ $service.WaitForExit()
 `doctor --service` 只检查配置，不探测运行进程或端口。`/health` 无需令牌；
 MCP 请求通过 Bearer 令牌认证，并校验 Host 和 Origin。服务只监听 `127.0.0.1`，不信任代理头，请求正文上限 64 KiB。
 
-外部 Agent 可参考 [独立客户端示例](../examples/local_agent_client.py)，使用官方 MCP SDK 发现和调用工具。
+外部 Agent 可参考 [独立客户端示例](../backend/examples/local_agent_client.py)，使用官方 MCP SDK 发现和调用工具。
 `structured_content` 是完整 ToolResult，`content[0].text` 是它的 JSON 文本，业务失败带 `is_error=true`。
 MCP 不保存协议会话或运行检查点；后台脚本不提供自动重启或登录自启。

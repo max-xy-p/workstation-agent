@@ -12,7 +12,9 @@ $env:POSTGRES_PASSWORD = '替换为你的数据库密码'
 docker compose up -d --wait postgres
 $dbPassword = [uri]::EscapeDataString($env:POSTGRES_PASSWORD)
 $env:WORKSTATION_AGENT_DATABASE_URL = "postgresql://workstation:${dbPassword}@127.0.0.1:5432/workstation_agent"
+cd backend
 uv sync
+$env:WORKSTATION_AGENT_WORKSPACE = (Resolve-Path ..).Path
 uv run workstation-agent init-db
 uv run workstation-agent doctor --database
 ```
@@ -24,7 +26,7 @@ uv run workstation-agent doctor --database
 `WORKSTATION_AGENT_DATABASE_URL` 默认未配置，格式为 `postgresql://用户:密码@主机:端口/数据库`，
 特殊字符需 URL 编码。其他终端和服务进程需注入同一连接；项目不会自动读取 `.env`。
 
-停止并保留数据用 `docker compose stop postgres`。已有数据卷继续使用首次初始化的账号密码，
+回到仓库根目录，停止并保留数据用 `docker compose stop postgres`。已有数据卷继续使用首次初始化的账号密码，
 修改环境变量不会修改数据库内的密码。
 
 ## 数据与隔离

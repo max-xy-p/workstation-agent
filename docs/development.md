@@ -3,10 +3,34 @@
 需要 Python 3.13+、uv 和专用 PostgreSQL 测试数据库。先阅读 [架构](architecture.md) 与 [开发约定](../AGENTS.md)；
 编码、类型和文档规范以开发约定为准，本篇只补操作与扩展方法。
 
+## 目录与命令位置
+
+```text
+workstation-agent/
+├── frontend/                 React 页面、前端测试和 Node 配置
+├── backend/
+│   ├── src/workstation_agent/ Agent、应用用例、通信接口和基础设施
+│   ├── tests/                Python 单元、集成和场景测试
+│   ├── scripts/              后端启动脚本
+│   ├── examples/             独立客户端示例
+│   ├── pyproject.toml        Python 依赖、打包和检查配置
+│   └── uv.lock               Python 依赖锁定文件
+├── docs/                     共享使用与架构文档
+└── compose.yaml              PostgreSQL 本机部署配置
+```
+
+Python 命令在 `backend/` 执行，npm 命令在 `frontend/` 执行，Docker Compose 命令在仓库根目录执行。
+两端分别维护依赖和构建产物；后端的 Agent 位于 `backend/src/workstation_agent/agent/`，由 Application 调用。
+已有根目录 `.venv/` 不再用于后端，整理目录后需在 `backend/` 重新运行 `uv sync`。
+
 ## 环境与检查
 
+从仓库根目录开始：
+
 ```powershell
+cd backend
 uv sync
+$env:WORKSTATION_AGENT_WORKSPACE = (Resolve-Path ..).Path
 # 按数据库文档设置 WORKSTATION_AGENT_DATABASE_URL，测试不要指向重要数据库。
 uv run workstation-agent init-db
 uv run python -m unittest discover -s tests -v
@@ -18,12 +42,12 @@ uv build
 
 测试使用临时工作区隔离数据，但会在数据库中留下记录；部署见 [数据库说明](database.md)。
 离线模型夹具验证协议和编排，外部模型效果需独立验收。
-Pyright 的检查范围在 `pyproject.toml`；新增或重构 Python 模块时将其及直接调用方加入清单，不扩大忽略范围。
+Pyright 的检查范围在 `backend/pyproject.toml`；新增或重构 Python 模块时将其及直接调用方加入清单，不扩大忽略范围。
 Ruff 不替代类型检查。涉及 migration 或打包资源时，确认资源已进入 Wheel。
 
 ## 前端工作台
 
-`frontend/` 是独立的 React + TypeScript + Vite 工程，后端继续位于 `src/workstation_agent/`。
+`frontend/` 是独立的 React + TypeScript + Vite 工程，后端位于 `backend/src/workstation_agent/`。
 需要 Node.js 22.12+；在前端目录运行：
 
 ```powershell
@@ -52,7 +76,7 @@ Vite 将同源 `/api` 请求转发到本机 Agent 的 8766 端口；使用其他
 | `src/App.tsx` | 用户动作与组件组装，修改历史时传入读取到的版本 |
 | `tests/` | Chromium 浏览器回归；真实后端联调由专用夹具和环境变量显式启用 |
 
-真实后端联调：在仓库根目录配置专用 `WORKSTATION_AGENT_DATABASE_URL`、至少 32 位的
+真实后端联调：在 `backend/` 目录配置专用 `WORKSTATION_AGENT_DATABASE_URL`、至少 32 位的
 `WORKSTATION_AGENT_E2E_TOKEN` 和 `WORKSTATION_AGENT_HTTP_PORT=18766`，运行
 `uv run python -m tests.serve_frontend_fixture`。前端终端注入相同的测试令牌与端口后运行 `npm test`。
 夹具使用临时工作区和离线模型，不需要真实模型密钥；未提供测试令牌时，该项浏览器测试跳过。
