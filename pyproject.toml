@@ -57,6 +57,7 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "tests/serve_frontend_fixture.py",
     "src/workstation_agent/api",
     "src/workstation_agent/domain/conversations.py",
     "src/workstation_agent/application/conversations.py",

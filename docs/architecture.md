@@ -14,6 +14,7 @@ CLI / HTTP / 后续通信适配器
 
 | 模块 | 职责与边界 |
 | --- | --- |
+| `frontend/` | 独立 React 工程，通过同源 HTTP 访问用例；不导入后端源码或访问数据库 |
 | `api/` | 与 HTTP 无关的请求和结果契约，不决定业务行为 |
 | `interfaces/`、CLI | 校验通信请求、认证和转换响应，只调用 Application |
 | `application/` | 协调任务、会话、CRUD、审批和状态；通过明确协议调用外围能力 |

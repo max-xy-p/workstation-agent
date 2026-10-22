@@ -21,6 +21,48 @@ uv build
 Pyright 的检查范围在 `pyproject.toml`；新增或重构 Python 模块时将其及直接调用方加入清单，不扩大忽略范围。
 Ruff 不替代类型检查。涉及 migration 或打包资源时，确认资源已进入 Wheel。
 
+## 前端工作台
+
+`frontend/` 是独立的 React + TypeScript + Vite 工程，后端继续位于 `src/workstation_agent/`。
+需要 Node.js 22.12+；在前端目录运行：
+
+```powershell
+npm ci
+npm run dev
+# 类型检查和生产构建；浏览器测试首次使用时先安装 Chromium。
+npm run build
+npx playwright install chromium
+npm test
+```
+
+开发地址为 `http://127.0.0.1:5173`，`npm run preview` 在 4173 预览构建结果。
+Vite 将同源 `/api` 请求转发到本机 Agent 的 8766 端口；使用其他端口时，启动前端前设置
+`WORKSTATION_AGENT_HTTP_PORT`。代理重写后端 Host/Origin，后端认证和跨域限制保持原规则。
+这些服务仅监听本机；正式静态托管还需提供相同的 `/api` 转发配置。
+
+页面点击“连接本机 Agent”后输入 HTTP 令牌，令牌仅保存在内存，刷新后需重新输入。
+不在 `VITE_*`、URL、localStorage 或 sessionStorage 中存令牌。没有后端时可显式选择页面演示，
+或访问 `/?demo=1`；演示数据不发出 API 请求，刷新后重置，页面始终标明演示模式。
+
+| 目录/文件 | 职责 |
+| --- | --- |
+| `src/api/` | 与后端契约对应的 Zod 校验、明确的 HTTP 方法及隔离的演示数据 |
+| `src/useWorkspace.ts` | 可取消的读取与轮询、分页及消息版本同步，不自动重试写入 |
+| `src/components/` | 会话导航、消息、Markdown、运行侧栏与弹窗 |
+| `src/App.tsx` | 用户动作与组件组装，修改历史时传入读取到的版本 |
+| `tests/` | Chromium 浏览器回归；真实后端联调由专用夹具和环境变量显式启用 |
+
+真实后端联调：在仓库根目录配置专用 `WORKSTATION_AGENT_DATABASE_URL`、至少 32 位的
+`WORKSTATION_AGENT_E2E_TOKEN` 和 `WORKSTATION_AGENT_HTTP_PORT=18766`，运行
+`uv run python -m tests.serve_frontend_fixture`。前端终端注入相同的测试令牌与端口后运行 `npm test`。
+夹具使用临时工作区和离线模型，不需要真实模型密钥；未提供测试令牌时，该项浏览器测试跳过。
+
+React 管理交互，Vite 提供开发代理和构建；Zod 校验网络边界，react-markdown/remark-gfm
+展示 Markdown，Lucide 提供图标。未启用原始 HTML，也不自动加载模型返回的远程图片。
+无需额外 Node 后端、SSR 或全局状态框架；`package-lock.json` 固定依赖，运行成本是本机开发进程与浏览器资源。
+依据：[React 客户端应用](https://react.dev/learn/creating-a-react-app)、[Vite](https://vite.dev/guide/)、
+[react-markdown](https://github.com/remarkjs/react-markdown)。
+
 ## 添加能力
 
 先尝试现有框架的配置与组件组合，再用官方扩展接口，最后才补最小业务逻辑。

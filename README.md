@@ -1,6 +1,6 @@
 # Workstation Agent
 
-面向个人工作站的单 Agent 项目，使用 LangChain / LangGraph 执行任务，提供 CLI、本机 MCP 工具服务和 Agent HTTP 接口。持久化使用 PostgreSQL，前端尚未实现。
+面向个人工作站的单 Agent 项目，使用 LangChain / LangGraph 执行任务，提供 CLI、本机 MCP 工具服务、Agent HTTP 接口和 React 工作台。持久化使用 PostgreSQL。
 
 ## 快速开始
 
@@ -17,6 +17,19 @@ uv run workstation-agent run "读取 .python-version，说明项目需要的 Pyt
 ```
 
 成功后输出包含 `status`、`answer` 和执行步骤的 JSON。项目不会自动读取 `.env`；配置示例见 [.env.example](.env.example)。
+
+## 打开工作台
+
+需要 Node.js 22.12+。先按 [HTTP 文档](docs/agent-service.md#启动与认证) 启动 Agent 服务，再在另一个终端运行：
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+打开 `http://127.0.0.1:5173`，点击“连接本机 Agent”并输入 HTTP 令牌。
+也可选择页面演示，无需模型和数据库。前端启动、检查和目录说明见 [开发指南](docs/development.md#前端工作台)。
 
 ## 使用入口
 
