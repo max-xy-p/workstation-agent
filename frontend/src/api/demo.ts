@@ -102,6 +102,7 @@ export class DemoGateway implements AgentGateway {
   async deleteSession(sessionId: string, revision: number) {
     this.check(sessionId, revision);
     this.chats = this.chats.filter((chat) => chat.id !== sessionId);
+    this.records = this.records.filter((run) => run.session_id !== sessionId);
     this.history = this.history.filter((message) => message.session_id !== sessionId);
   }
   async messages(sessionId: string, offset = 0) { this.find(sessionId); return this.page(this.history.filter((message) => message.session_id === sessionId), offset); }
@@ -122,14 +123,27 @@ export class DemoGateway implements AgentGateway {
     this.history = this.history.filter((entry) => entry.session_id !== sessionId || entry.position < message.position);
     this.touch(this.find(sessionId));
   }
-  async runs() {
+  async runs(offset = 0, _signal?: AbortSignal, sessionId?: string) {
     if (this.finishing && Date.now() >= this.finishing.at) {
       const { run } = this.finishing;
       const answer = '这是交互演示，任务没有发送到模型。\n\n点击左下角的**连接服务**，即可使用真实后端执行任务。';
       run.status = 'completed'; run.answer = answer; run.updated_at = now();
       this.push(run.session_id, 'assistant', answer, run.id); this.finishing = null;
     }
-    return structuredClone(this.records);
+    return this.page(this.records.filter((run) => !sessionId || run.session_id === sessionId)
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at)), offset);
+  }
+  async run(runId: string) {
+    const run = this.records.find((entry) => entry.id === runId);
+    if (!run) throw new ApiError(404, 'not_found', '运行记录不存在。');
+    return structuredClone(run);
+  }
+  async deleteRun(runId: string) {
+    const run = await this.run(runId);
+    if (!['completed', 'failed', 'cancelled', 'limit_reached', 'interrupted'].includes(run.status)) {
+      throw new ApiError(409, 'session_busy', '请先结束运行或处理审批。');
+    }
+    this.records = this.records.filter((entry) => entry.id !== runId);
   }
   async submit(sessionId: string, task: string) {
     if (this.finishing) throw new ApiError(409, 'agent_busy', 'Agent 正在执行另一项任务。');

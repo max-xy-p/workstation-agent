@@ -26,7 +26,7 @@ export const boardSchema = z.object({
 export const runSchema = z.object({
   id: z.string(), session_id: z.string(),
   status: z.enum(['created', 'preparing', 'thinking', 'acting', 'observing', 'waiting_approval',
-    'waiting_user', 'completed', 'failed', 'cancelled', 'limit_reached']),
+    'waiting_user', 'completed', 'failed', 'cancelled', 'limit_reached', 'interrupted']),
   node: z.string().nullable(), task_status: boardSchema.nullable(), answer: z.string().nullable(),
   error: z.string().nullable(), steps: z.array(stepSchema), updated_at: date,
 });
@@ -57,7 +57,9 @@ export interface AgentGateway {
   addMessage(id: string, content: string, revision: number): Promise<Message>;
   editMessage(id: string, messageId: string, content: string, revision: number): Promise<Message>;
   deleteMessage(id: string, messageId: string, revision: number): Promise<void>;
-  runs(signal?: AbortSignal): Promise<Run[]>;
+  runs(offset?: number, signal?: AbortSignal, sessionId?: string): Promise<Page<Run>>;
+  run(id: string, signal?: AbortSignal): Promise<Run>;
+  deleteRun(id: string): Promise<void>;
   submit(id: string, task: string): Promise<Run>;
   cancel(id: string): Promise<void>;
   approvals(id: string, signal?: AbortSignal): Promise<Approvals>;

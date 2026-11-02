@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from pydantic import JsonValue, TypeAdapter
 
-from .state import TaskBoard
+from ..domain.task_status import TaskBoard
 
 
 def project_board(

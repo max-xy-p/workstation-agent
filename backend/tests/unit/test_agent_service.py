@@ -15,6 +15,7 @@ from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
 from workstation_agent.application.agent_service import AgentServiceApplication, AgentServiceError
 from workstation_agent.domain.runs import RunStatus
+from workstation_agent.api.conversations import PageRequest
 from workstation_agent.safety import AllowSafeReadsPolicy
 from workstation_agent.tools.executor import ToolExecutor
 from workstation_agent.tools.langchain import local_tools
@@ -62,7 +63,7 @@ class AgentServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentServiceError) as caught:
             manager.get(first.id)
         self.assertEqual(caught.exception.status, 404)
-        self.assertEqual(len(manager.list_runs()), 1)
+        self.assertEqual(len(manager.list_runs(PageRequest()).items), 1)
 
     async def test_full_capacity_preserves_approval_and_still_allows_resume(self) -> None:
         manager = self.application([call_message("count", {}), AIMessage(content="完成")])
@@ -98,7 +99,7 @@ class AgentServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await submission
         async with asyncio.timeout(5):
-            while not manager.list_runs():
+            while not manager.list_runs(PageRequest()).items:
                 await asyncio.sleep(0.01)
-        run = manager.list_runs()[0]
+        run = manager.list_runs(PageRequest()).items[0]
         await self.wait_status(manager, run.id, RunStatus.COMPLETED)

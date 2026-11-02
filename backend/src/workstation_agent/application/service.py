@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
+from datetime import UTC, datetime
 from time import time
 from typing import Any, Literal, Protocol
 from weakref import WeakValueDictionary
@@ -25,10 +26,11 @@ from pydantic import TypeAdapter
 from ..agent.rag_guard import RagSearchStopped
 from ..context import ContextBuilder
 from ..context.budget import ContextLimitExceeded
-from ..context.state import ContextRuntime, RunControlState, TaskBoard, restore_board
+from ..context.state import ContextRuntime, RunControlState, restore_board
+from ..domain.task_status import TaskBoard
 from ..context.status import confirm_items
 from ..domain.execution import ExecutionControl, ExecutionStopped
-from ..domain.runs import Run, RunStatus, Session, Step, StepKind
+from ..domain.runs import TERMINAL_RUN_STATUSES, Run, RunStatus, Session, Step, StepKind
 from ..domain.conversations import ConversationMessage
 from ..memory.models import MemorySource
 from ..safety import PermissionRequired
@@ -36,18 +38,15 @@ from ..tools.approval import ApprovalDecision, ApprovalRequest
 from ..tools.builtin.memory import MEMORY_SOURCE
 from ..tools.execution import EXECUTION, execute_blocking
 from ..tools.langchain import ToolService
+from ..tools.contracts import ToolError
+from ..storage.base import RunRepository
+from .runs import RunPersistenceError
 
 
 class _ExecutionInput(InputAgentState):
     """在官方消息输入中附加由应用构造的运行控制记录。"""
 
     run_control: RunControlState
-
-
-class RunRepository(Protocol):
-    """业务任务存储只负责结果，不能替代框架检查点。"""
-
-    def save(self, run: Run) -> None: ...
 
 
 class SessionCheckpointer(Protocol):
@@ -86,7 +85,7 @@ class AgentApplication:
         self._active: dict[str, tuple[ExecutionControl, asyncio.Task[Run]]] = {}
         self.graph = graph
         self.context = context or ContextBuilder()
-        self.repository = repository
+        self.repository: RunRepository | None = repository
         self.checkpointer = checkpointer
         self.extraction = extraction
         self.history: ConversationHistory | None = history
@@ -166,6 +165,22 @@ class AgentApplication:
                     item.id: ApprovalRequest.model_validate(item.value)
                     for item in snapshot.interrupts
                 }
+
+    async def delete_run(self, run_id: str) -> None:
+        """在会话锁内删除已结束记录，不清除消息、检查点或外部操作。"""
+        if self.repository is None:
+            raise ToolError("运行历史存储未配置", code="database_not_configured")
+        run = self.repository.get(run_id)
+        if run is None:
+            raise ToolError("运行不存在", code="not_found")
+        lock = self._locks.setdefault(run.session_id, asyncio.Lock())
+        if lock.locked():
+            raise ToolError("会话正在执行", code="session_busy")
+        async with lock:
+            with self._lease(self._config(run.session_id)):
+                if run.status not in TERMINAL_RUN_STATUSES:
+                    raise ToolError("请先结束运行或处理审批", code="session_busy")
+                self.repository.delete(run_id)
 
     async def resume_task(
         self,
@@ -251,10 +266,17 @@ class AgentApplication:
         on_started: Callable[[str], None] | None = None,
     ) -> Run:
         run, control_state = self._prepare_run(task, session_id, runtime, saved_control)
+        # 在模型和工具开始前确认运行记录可写；失败时不接受任务。
+        self._save(run)
         inputs_messages: list[AnyMessage | dict[str, Any]] = [HumanMessage(content=task, id=run.id + "_user")]
         if self.history is not None:
-            snapshot = await self.graph.aget_state(config)
-            saved_messages = self.history.start(run, restore=not snapshot.values.get("messages"))
+            try:
+                snapshot = await self.graph.aget_state(config)
+                saved_messages = self.history.start(run, restore=not snapshot.values.get("messages"))
+            except Exception:
+                run.fail("会话文本保存失败，任务未开始")
+                self._save(run)
+                raise
             if resume is None:
                 inputs_messages = [
                     HumanMessage(content=message.content, id=message.id) if message.role == "user"
@@ -277,16 +299,17 @@ class AgentApplication:
         )
         extraction_step: Step | None = None
         try:
-            self._save(run)
             if on_started:
                 on_started(run.id)
             run.transition(RunStatus.PREPARING)
+            self._save(run)
 
             inputs: _ExecutionInput = {
                 "messages": inputs_messages,
                 "run_control": control_state,
             }
             run.transition(RunStatus.THINKING)
+            self._save(run)
             async with asyncio.timeout(max(0, control.deadline - time())):
                 extraction_step = await self._execute_graph(
                     resume if resume is not None else inputs,
@@ -296,6 +319,17 @@ class AgentApplication:
                     on_node,
                     on_status,
                 )
+        except RunPersistenceError:
+            run.fail("运行记录保存失败，已停止继续执行")
+            control.cancelled.set()
+            EXECUTION.reset(execution_token)
+            execution_token = None
+            try:
+                await self._close_run(config, control_state)
+            except ToolError:
+                # 数据库不可用时无法关闭检查点；重启核对会处理遗留状态，不继续执行工具。
+                pass
+            raise
         except PermissionRequired:
             run.fail("内部操作缺少授权，请检查会话或记忆配置")
         except (ModelCallLimitExceededError, ToolCallLimitExceededError, GraphRecursionError):
@@ -338,6 +372,15 @@ class AgentApplication:
         run = Run(task=task, session_id=session_id)
         if saved is not None:
             run.id = saved["run_id"]
+            if self.repository is not None:
+                # CLI 恢复可能是升级后的首次写入，先迁移再查询原运行的身份范围。
+                self.repository.initialize()
+            previous = self.repository.get(run.id) if self.repository is not None else None
+            if previous is not None:
+                run.steps = deepcopy(previous.steps)
+                run.created_at = previous.created_at
+                run.node = previous.node
+                run.task_status = deepcopy(previous.task_status)
         runtime.run_id = run.id
         control: RunControlState = saved or {
             "schema_version": 1,
@@ -401,13 +444,26 @@ class AgentApplication:
         on_status: Callable[[TaskBoard], None] | None,
     ) -> AIMessage | None:
         """在框架流接入边界忽略非字段更新，再通知调用方并记录正式消息。"""
+        run.node = node
+        run.updated_at = datetime.now(UTC)
+        if not isinstance(values, dict):
+            if on_node:
+                on_node(node)
+            return None
+        run.task_status = deepcopy(runtime.board)
+        latest = self._record_messages(node, values, run)
+        if node == "model":
+            run.transition(RunStatus.ACTING if latest is not None and latest.tool_calls else RunStatus.THINKING)
+        elif node == "tools":
+            run.transition(RunStatus.OBSERVING)
+        elif node.endswith("before_model"):
+            run.transition(RunStatus.THINKING)
+        self._save(run)
         if on_node:
             on_node(node)
-        if not isinstance(values, dict):
-            return None
         if runtime.board is not None and on_status:
             on_status(deepcopy(runtime.board))
-        return self._record_messages(node, values, run)
+        return latest
 
     @staticmethod
     def _record_messages(node: str, values: dict[str, Any], run: Run) -> AIMessage | None:
@@ -458,9 +514,38 @@ class AgentApplication:
                 runtime.board["blockers"] = [*runtime.board["blockers"], run.error][-8:]
             if on_status:
                 on_status(deepcopy(runtime.board))
-        self._save(run)
+            run.task_status = deepcopy(runtime.board)
         if self.history is not None:
             self.history.finish(run)
+        self._save(run)
+
+    async def recover_runs(self) -> None:
+        """核对未结束运行；先取得会话锁，仍被其他进程执行的会话保持不变。"""
+        if self.repository is None:
+            return
+        for candidate in self.repository.unfinished():
+            config = self._config(candidate.session_id)
+            try:
+                with self._lease(config):
+                    run = self.repository.get(candidate.id)
+                    if run is None or run.status in TERMINAL_RUN_STATUSES:
+                        continue
+                    snapshot = await self.graph.aget_state(config)
+                    control = snapshot.values.get("run_control")
+                    matching = control is not None and control.get("run_id") == run.id
+                    if matching and control is not None and not control.get("closed") and snapshot.interrupts:
+                        run.status = RunStatus.WAITING_APPROVAL
+                        run.error = "工具需要审批，请查看待审批列表后恢复运行"
+                    else:
+                        run.status = RunStatus.INTERRUPTED
+                        run.error = "执行进程已结束，任务中断；已发生的工具操作不会自动重放"
+                        if matching and control is not None and not control.get("closed"):
+                            await self._close_run(config, TypeAdapter(RunControlState).validate_python(control))
+                    run.updated_at = datetime.now(UTC)
+                    self._save(run)
+            except ToolError as exc:
+                if exc.code != "session_busy":
+                    raise
 
     async def _close_run(self, config: RunnableConfig, control: RunControlState) -> None:
         """保存终止标记、补齐被中断的工具结果，并用官方接口清除待执行节点。"""

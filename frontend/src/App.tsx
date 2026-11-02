@@ -9,7 +9,8 @@ import { Inspector, statusName } from './components/Inspector';
 import { Sidebar } from './components/Sidebar';
 import { Modal } from './components/Modal';
 
-type Editor = { kind: 'rename' | 'delete-session'; session: Conversation }
+type Editor = { kind: 'delete-run'; session: Conversation; runId: string }
+  | { kind: 'rename' | 'delete-session'; session: Conversation }
   | { kind: 'edit-message' | 'delete-message'; session: Conversation; message: Message }
   | { kind: 'background'; session: Conversation };
 
@@ -22,10 +23,15 @@ export default function App() {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
+  useEffect(() => { setInspectedId(null); }, [workspace.selectedId]);
   const current = workspace.current;
   const selectedRun = workspace.runs.filter((run) => run.session_id === workspace.selectedId)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .find((run) => isActive(run) || run.status === 'waiting_approval' || workspace.messages.some((message) => message.run_id === run.id));
+  const sessionRuns = workspace.runs.filter((run) => run.session_id === workspace.selectedId)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const inspectedRun = sessionRuns.find((run) => run.id === inspectedId) ?? selectedRun ?? sessionRuns[0];
   const globalActive = workspace.runs.some(isActive);
   const approvalCount = Object.keys(workspace.approvals).length;
   const locked = Boolean(selectedRun && (isActive(selectedRun) || ['waiting_approval', 'waiting_user'].includes(selectedRun.status))) || approvalCount > 0;
@@ -47,6 +53,7 @@ export default function App() {
       if (!chat) chat = await gateway.create(task.slice(0, 32));
       else if (chat.title === '新会话' && workspace.messages.length === 0) chat = await gateway.rename(chat.id, task.slice(0, 32), chat.revision);
       const run = await gateway.submit(chat.id, task);
+      setInspectedId(null);
       workspace.acceptRun(run);
       if (workspace.selectedId !== run.session_id) workspace.select(run.session_id);
       setInspector(true);
@@ -59,6 +66,7 @@ export default function App() {
     const success = await mutate(async () => {
       const { id, revision } = operation.session;
       switch (operation.kind) {
+        case 'delete-run': await gateway.deleteRun(operation.runId); setInspectedId(null); break;
         case 'rename': await gateway.rename(id, content.trim(), revision); break;
         case 'delete-session':
           await gateway.deleteSession(id, revision);
@@ -103,7 +111,9 @@ export default function App() {
         onBackground={() => { if (current) openEditor({ kind: 'background', session: current }); }} />
     </main>
     {inspector && <><button className="inspector-scrim" aria-label="关闭运行详情遮罩" onClick={() => setInspector(false)} />
-      <Inspector run={selectedRun} approvals={workspace.approvals} busy={busy || globalActive}
+      <Inspector run={inspectedRun} history={sessionRuns} onSelect={setInspectedId}
+        hasMore={workspace.hasMoreRuns} onMore={workspace.moreRuns}
+        onDelete={() => { if (current && inspectedRun) openEditor({ kind: 'delete-run', session: current, runId: inspectedRun.id }); }} approvals={workspace.approvals} busy={busy || globalActive}
         onClose={() => setInspector(false)} onResume={(decisions) => {
           const id = workspace.selectedId;
           return gateway && id ? mutate(async () => { await gateway.resume(id, decisions); }) : Promise.resolve(false);
@@ -147,11 +157,12 @@ function EditorDialog({ editor, busy, error, onClose, onSave }: {
   editor: Editor; busy: boolean; error: string; onClose: () => void; onSave: (content: string) => Promise<void>;
 }) {
   const [content, setContent] = useState(editor.kind === 'rename' ? editor.session.title : editor.kind === 'edit-message' ? editor.message.content : '');
-  const deleting = editor.kind === 'delete-session' || editor.kind === 'delete-message';
-  const title = { rename: '更改会话标题', 'delete-session': '删除这个会话？', 'edit-message': '编辑用户消息', 'delete-message': '删除这条及后续消息？', background: '补充背景文本' }[editor.kind];
+  const deleting = editor.kind === 'delete-session' || editor.kind === 'delete-message' || editor.kind === 'delete-run';
+  const title = { rename: '更改会话标题', 'delete-run': '删除这次运行记录？', 'delete-session': '删除这个会话？', 'edit-message': '编辑用户消息', 'delete-message': '删除这条及后续消息？', background: '补充背景文本' }[editor.kind];
   return <Modal title={title} onClose={onClose} busy={busy}>
     <form onSubmit={(event) => { event.preventDefault(); void onSave(content); }}>
-      <p className="modal-description">{editor.kind === 'delete-session' ? `“${editor.session.title}”的全部消息与执行检查点将被删除。长期记忆和外部文件会保留。` :
+      <p className="modal-description">{editor.kind === 'delete-run' ? '本次运行的状态与执行步骤将被删除。会话消息会保留，已经发生的工具操作不会撤销。' :
+        editor.kind === 'delete-session' ? `“${editor.session.title}”的全部消息、运行记录与执行检查点将被删除。长期记忆和外部文件会保留。` :
         editor.kind === 'delete-message' ? '这条消息及其后的全部消息将被删除，运行上下文会重置。已发生的工具操作不会撤销。' :
           editor.kind === 'edit-message' ? '保存后会删除这条消息之后的全部消息，并重置运行上下文。不会自动重新执行任务。' :
             editor.kind === 'background' ? '只保存到当前会话，不调用模型。需要 Agent 回答时，请在主输入框发送任务。' : '用一个容易辨认的标题，方便下次找到这段对话。'}</p>

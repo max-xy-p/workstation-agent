@@ -10,8 +10,9 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
+from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import TypeAdapter
 from starlette.testclient import TestClient
 
@@ -20,9 +21,11 @@ from tests.unit.test_execution_control import CountingTool, EchoArguments
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
 from workstation_agent.application.agent_service import ServiceRun
-from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for
+from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for, build_run_application
 from workstation_agent.config import Settings
-from workstation_agent.domain.runs import RunStatus
+from workstation_agent.domain.runs import Run, RunStatus, Step, StepKind
+from workstation_agent.storage.postgres.runs import PostgresRunRepository
+from workstation_agent.tools.contracts import ToolError
 from workstation_agent.interfaces.agent_http import build_agent_service
 from workstation_agent.safety import AllowSafeReadsPolicy, PermissionLevel
 from workstation_agent.storage.postgres.checkpoints import PostgresSessionBackend
@@ -106,9 +109,114 @@ class AgentHttpTests(unittest.TestCase):
             self.assertEqual(completed.answer, "完成")
             self.assertEqual(completed.session_id, "first")
             self.assertTrue(completed.steps)
-            self.assertEqual(client.get("/runs").json()[0]["id"], run.id)
+            self.assertEqual(client.get("/runs").json()["items"][0]["id"], run.id)
             self.assertFalse(client.post(f"/runs/{run.id}/cancel").json()["cancel_requested"])
             self.assertEqual(client.get("/runs/missing").status_code, 404)
+
+    def test_history_survives_restart_and_explicit_delete_keeps_messages(self) -> None:
+        with self.client([AIMessage(content="第一次完成"), AIMessage(content="第二次完成")]) as client:
+            first = client.post("/runs", json={"task": "第一项", "session_id": "history"}).json()
+            self.wait_run(client, first["id"], RunStatus.COMPLETED)
+            second = client.post("/runs", json={"task": "第二项", "session_id": "history"}).json()
+            self.wait_run(client, second["id"], RunStatus.COMPLETED)
+        with self.client([AIMessage(content="第三次完成")]) as client:
+            saved = client.get(f'/runs/{first["id"]}').json()
+            self.assertTrue(saved["steps"])
+            self.assertEqual(saved["answer"], "第一次完成")
+            page = client.get("/runs?session_id=history&limit=1").json()
+            self.assertEqual(page["items"][0]["id"], second["id"])
+            self.assertEqual(page["next_offset"], 1)
+            self.assertEqual(client.get("/runs?session_id=history&limit=1&offset=1").json()["items"][0]["id"], first["id"])
+            for query in ("limit=0", "offset=-1", "session_id=../bad", "unknown=1"):
+                self.assertEqual(client.get("/runs?" + query).status_code, 422)
+            self.assertEqual(client.delete(f'/runs/{first["id"]}').status_code, 200)
+            self.assertEqual(client.get(f'/runs/{first["id"]}').status_code, 404)
+            self.assertEqual(len(client.get("/sessions/history/messages").json()["items"]), 4)
+            third = client.post("/runs", json={"task": "继续提问", "session_id": "history"}).json()
+            self.wait_run(client, third["id"], RunStatus.COMPLETED)
+            revision = client.get("/sessions/history").json()["revision"]
+            self.assertEqual(client.delete(f"/sessions/history?revision={revision}").status_code, 200)
+            self.assertEqual(client.get("/runs?session_id=history").json()["items"], [])
+            self.assertEqual(client.get(f'/runs/{third["id"]}').status_code, 404)
+
+    def test_restart_marks_orphan_interrupted_and_keeps_last_steps(self) -> None:
+        run = Run(task="宕机前任务", session_id="orphan")
+        step = Step(run_id=run.id, kind=StepKind.MODEL, name="model")
+        step.finish()
+        run.steps.append(step)
+        run.transition(RunStatus.THINKING)
+        build_run_application(self.settings).save(run)
+        with self.client([AIMessage(content="新任务完成")]) as client:
+            restored = self.wait_run(client, run.id, RunStatus.INTERRUPTED)
+            self.assertEqual(restored.steps[0].id, step.id)
+            self.assertEqual(client.post(f"/runs/{run.id}/cancel").status_code, 200)
+            new = client.post("/runs", json={"task": "重新安排任务", "session_id": "orphan"}).json()
+            self.wait_run(client, new["id"], RunStatus.COMPLETED)
+
+    def test_other_service_cannot_interrupt_running_session(self) -> None:
+        tool = BlockingReadTool()
+        self.tool = tool
+        with self.client([call_message("count", {})]) as first:
+            run = first.post("/runs", json={"task": "正在执行", "session_id": "live"}).json()
+            self.assertTrue(tool.started.wait(5))
+            with self.client([AIMessage(content="备用服务")]) as second:
+                detail = second.get(f'/runs/{run["id"]}').json()
+                self.assertIn(detail["status"], {"thinking", "acting", "observing"})
+                self.assertTrue(any(step["kind"] == "model" for step in detail["steps"]))
+                self.assertEqual(second.delete(f'/runs/{run["id"]}').status_code, 409)
+            self.assertEqual(first.post(f'/runs/{run["id"]}/cancel').status_code, 202)
+            self.wait_run(first, run["id"], RunStatus.CANCELLED)
+
+    def test_restart_closes_abandoned_checkpoint_without_replaying_tools(self) -> None:
+        run = Run(task="未完成的原任务", session_id="abandoned")
+        run.transition(RunStatus.ACTING)
+        build_run_application(self.settings).save(run)
+        saver = AuthorizedCheckpointer(PostgresSessionBackend(database_for(self.settings)),
+                                       self.settings.memory_access, MemoryApprovalPolicy(sessions=True))
+        graph = build_agent(ScriptedModel(responses=[AIMessage(content="不应执行")]), [], checkpointer=saver)
+        graph.update_state(saver.config(run.session_id), {
+            "messages": [HumanMessage(content=run.task, id=run.id + "_user")],
+            "run_control": {"schema_version": 1, "run_id": run.id, "task": run.task,
+                            "deadline": time.time() + 60, "closed": False},
+        }, as_node="model")
+        with self.client([AIMessage(content="新任务已完成")]) as client:
+            self.wait_run(client, run.id, RunStatus.INTERRUPTED)
+            self.assertEqual(self.tool.calls, [])
+            saved = saver.get_tuple(saver.config(run.session_id))
+            assert saved is not None
+            self.assertTrue(saved.checkpoint["channel_values"]["run_control"]["closed"])
+            next_run = client.post("/runs", json={"task": "用户重新发出的任务", "session_id": run.session_id}).json()
+            self.wait_run(client, next_run["id"], RunStatus.COMPLETED)
+
+    def test_initial_save_failure_does_not_accept_or_execute_task(self) -> None:
+        with self.client([call_message("count", {})]) as client:
+            with patch.object(PostgresRunRepository, "save", side_effect=ToolError("private-database-error", code="database_failed")):
+                result = client.post("/runs", json={"task": "不应执行", "session_id": "save_failed"})
+            self.assertEqual(result.status_code, 503)
+            self.assertNotIn("private-database-error", result.text)
+            self.assertEqual(self.tool.calls, [])
+            self.assertEqual(client.get("/runs").json()["items"], [])
+            self.assertEqual(client.get("/sessions").json()["items"], [])
+
+    def test_step_save_failure_stops_before_next_tool(self) -> None:
+        tool = CountingTool()
+        tool.permission = PermissionLevel.SAFE_READ
+        self.tool = tool
+        save = PostgresRunRepository.save
+
+        def fail_after_model(repository: PostgresRunRepository, run: Run) -> None:
+            if any(step.kind == StepKind.MODEL for step in run.steps):
+                raise ToolError("private-step-error", code="database_failed")
+            save(repository, run)
+
+        with self.client([call_message("count", {}), AIMessage(content="不应继续")]) as client:
+            with patch.object(PostgresRunRepository, "save", fail_after_model):
+                result = client.post("/runs", json={"task": "保存失败应停止", "session_id": "step_failed"})
+                self.assertEqual(result.status_code, 202)
+                failed = self.wait_run(client, result.json()["id"], RunStatus.FAILED)
+                self.assertIn("保存失败", failed.error or "")
+                self.assertEqual(client.get("/runs").json()["items"][0]["status"], "failed")
+            self.assertEqual(tool.calls, [])
 
     def test_builder_rejects_missing_credentials_and_conflicting_ports(self) -> None:
         with self.assertRaises(ValueError):
@@ -131,17 +239,19 @@ class AgentHttpTests(unittest.TestCase):
             self.assertEqual(client.post("/runs", content="text").status_code, 415)
             oversized = client.post("/runs", content="x" * 65_537, headers={"Content-Type": "application/json"})
             self.assertEqual(oversized.status_code, 413)
-            self.assertEqual(client.get("/runs").json(), [])
+            self.assertEqual(client.get("/runs").json()["items"], [])
 
     def test_restarted_service_resumes_approval_with_original_id_once(self) -> None:
         with self.client([call_message("count", {"text": "审批内容"})]) as client:
             response = client.post("/runs", json={"task": "执行操作", "session_id": "approval"})
             run = _RUN.validate_json(response.content)
             self.wait_run(client, run.id, RunStatus.WAITING_APPROVAL)
+            previous_steps = [step.id for step in self.wait_run(client, run.id, RunStatus.WAITING_APPROVAL).steps]
+            self.assertEqual(client.delete(f"/runs/{run.id}").status_code, 409)
             self.assertEqual(self.tool.calls, [])
             self.assertEqual(client.post("/runs", json={"task": "覆盖任务", "session_id": "approval"}).status_code, 409)
         with self.client([AIMessage(content="完成")]) as client:
-            self.assertEqual(client.get(f"/runs/{run.id}").status_code, 404)
+            self.assertEqual(client.get(f"/runs/{run.id}").status_code, 200)
             pending = client.get("/sessions/approval/approvals").json()
             self.assertEqual(len(pending), 1)
             bad = client.post("/sessions/approval/resume", json={"decisions": {"old-id": "approve"}})
@@ -150,7 +260,8 @@ class AgentHttpTests(unittest.TestCase):
             resumed = client.post("/sessions/approval/resume", json={"decisions": decisions})
             self.assertEqual(resumed.status_code, 202, resumed.text)
             self.assertEqual(_RUN.validate_json(resumed.content).id, run.id)
-            self.wait_run(client, run.id, RunStatus.COMPLETED)
+            completed = self.wait_run(client, run.id, RunStatus.COMPLETED)
+            self.assertTrue(set(previous_steps).issubset({step.id for step in completed.steps}))
             self.assertEqual(self.tool.calls, ["审批内容"])
             self.assertEqual(client.get("/sessions/approval/approvals").json(), {})
             self.assertEqual(client.post("/sessions/approval/resume", json={"decisions": decisions}).status_code, 409)
@@ -238,7 +349,7 @@ class AgentHttpTests(unittest.TestCase):
             edited = client.patch(path + "/" + message["id"], json={"content": "改写", "revision": 2})
             self.assertEqual(edited.status_code, 200, edited.text)
             self.assertEqual(len(client.get(path).json()["items"]), 1)
-            self.assertEqual(client.get("/runs").json(), [])
+            self.assertEqual(client.get("/runs").json()["items"], [])
             self.assertEqual(client.post(path, json={"content": "伪造", "revision": 3, "role": "assistant"}).status_code, 422)
         with self.client([AIMessage(content="完成")]) as client:
             self.assertEqual(client.get(path).json()["items"][0]["content"], "改写")

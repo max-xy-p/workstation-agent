@@ -59,7 +59,11 @@ export class HttpGateway implements AgentGateway {
   addMessage(id: string, content: string, revision: number) { return this.request(`/sessions/${part(id)}/messages`, messageSchema, 'POST', { content, revision }); }
   editMessage(id: string, messageId: string, content: string, revision: number) { return this.request(`/sessions/${part(id)}/messages/${part(messageId)}`, messageSchema, 'PATCH', { content, revision }); }
   async deleteMessage(id: string, messageId: string, revision: number) { await this.request(`/sessions/${part(id)}/messages/${part(messageId)}?revision=${revision}`, successSchema, 'DELETE'); }
-  runs(signal?: AbortSignal) { return this.request('/runs', z.array(runSchema), 'GET', undefined, signal); }
+  runs(offset = 0, signal?: AbortSignal, sessionId?: string) {
+    return this.request(`/runs?limit=50&offset=${offset}${sessionId ? `&session_id=${part(sessionId)}` : ''}`, pageSchema(runSchema), 'GET', undefined, signal);
+  }
+  run(id: string, signal?: AbortSignal) { return this.request(`/runs/${part(id)}`, runSchema, 'GET', undefined, signal); }
+  async deleteRun(id: string) { await this.request(`/runs/${part(id)}`, successSchema, 'DELETE'); }
   submit(id: string, task: string) { return this.request('/runs', runSchema, 'POST', { session_id: id, task }); }
   async cancel(id: string) { await this.request(`/runs/${part(id)}/cancel`, successSchema, 'POST'); }
   approvals(id: string, signal?: AbortSignal) { return this.request(`/sessions/${part(id)}/approvals`, approvalsSchema, 'GET', undefined, signal); }

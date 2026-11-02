@@ -9,10 +9,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
-from ..context.state import TaskBoard
+from ..domain.task_status import TaskBoard
 from ..domain.runs import TERMINAL_RUN_STATUSES, Run, RunStatus, Session, Step
 from ..tools.approval import ApprovalRequest
 from .service import AgentApplication
+from .runs import RunApplication, RunPersistenceError
+from ..api.conversations import Page, PageRequest
 
 type RunOperation = Callable[
     [Callable[[str], None], Callable[[str], None], Callable[[TaskBoard], None]], Awaitable[Run]
@@ -30,7 +32,7 @@ class AgentServiceError(Exception):
 
 @dataclass(slots=True)
 class ServiceRun:
-    """提供可查询的运行进度；记录只在当前服务进程内限量保留。"""
+    """向客户端返回运行详情，不暴露用于模型输入的完整任务内部状态。"""
 
     id: str
     session_id: str
@@ -42,30 +44,63 @@ class ServiceRun:
     steps: list[Step] = field(default_factory=list)
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+    @classmethod
+    def from_run(cls, run: Run) -> ServiceRun:
+        """从持久化领域记录生成独立响应副本。"""
+        return cls(id=run.id, session_id=run.session_id, status=run.status, node=run.node,
+                   task_status=deepcopy(run.task_status), answer=run.answer, error=run.error,
+                   steps=deepcopy(run.steps), updated_at=run.updated_at)
+
 
 class AgentServiceApplication:
     """一次执行一个任务，提供提交、查询和控制入口，不引入任务队列或第二套循环。"""
 
-    def __init__(self, application: AgentApplication, *, capacity: int = 128) -> None:
+    def __init__(self, application: AgentApplication, *, capacity: int = 128,
+                 history: RunApplication | None = None) -> None:
         if capacity < 1:
             raise ValueError("服务保留的任务数量必须为正数")
         self.application: AgentApplication = application
+        self.history: RunApplication | None = history
         self.capacity = capacity
         self._runs: dict[str, ServiceRun] = {}
+        self._storage_failures: set[str] = set()
         self._worker: asyncio.Task[None] | None = None
         self._gate = asyncio.Lock()
         self._closed = False
 
     def get(self, run_id: str) -> ServiceRun:
-        """返回运行记录的副本；已淘汰或重启前的记录返回不存在。"""
+        """优先读取持久化详情；内存仅保留本进程句柄和存储失败说明。"""
+        cached = self._runs.get(run_id)
+        if self.history is not None:
+            saved = self.history.get(run_id)
+            if saved is not None:
+                if cached is not None and run_id in self._storage_failures:
+                    return deepcopy(cached)
+                return ServiceRun.from_run(saved)
+            raise AgentServiceError("not_found", "运行记录不存在", 404)
         run = self._runs.get(run_id)
         if run is None:
             raise AgentServiceError("not_found", "当前服务中没有该任务记录", 404)
         return deepcopy(run)
 
-    def list_runs(self) -> list[ServiceRun]:
-        """按最近更新时间返回本进程保留的运行记录。"""
-        return deepcopy(sorted(self._runs.values(), key=lambda run: run.updated_at, reverse=True))
+    def list_runs(self, page: PageRequest, *, session_id: str | None = None) -> Page[ServiceRun]:
+        """按更新时间分页返回历史；没有存储的测试实例只读取内存。"""
+        if self.history is not None:
+            saved = self.history.list_runs(page, session_id=session_id)
+            return Page(items=[deepcopy(self._runs[run.id]) if run.id in self._storage_failures and run.id in self._runs
+                               else ServiceRun.from_run(run) for run in saved.items], next_offset=saved.next_offset)
+        values = sorted((run for run in self._runs.values() if session_id is None or run.session_id == session_id),
+                        key=lambda run: (run.updated_at, run.id), reverse=True)
+        return Page(items=deepcopy(values[page.offset:page.offset + page.limit]),
+                    next_offset=page.offset + page.limit if len(values) > page.offset + page.limit else None)
+
+    async def delete(self, run_id: str) -> None:
+        """仅删除已结束运行；与运行启动和审批共用会话锁，不删除会话消息。"""
+        if self.history is None:
+            raise AgentServiceError("storage_unavailable", "运行历史存储未配置", 503)
+        await self.application.delete_run(run_id)
+        self._runs.pop(run_id, None)
+        self._storage_failures.discard(run_id)
 
     async def submit(
         self,
@@ -142,14 +177,16 @@ class AgentServiceApplication:
             raise AgentServiceError("agent_busy", "Agent 正在执行任务，请完成或取消后再提交")
 
     def _make_room(self) -> None:
-        """达到容量时淘汰最早结束的记录，待审批任务不会被自动删除。"""
+        """持久化服务只淘汰缓存；没有存储的实例只淘汰已结束记录，保留审批入口。"""
         if len(self._runs) < self.capacity:
             return
-        finished = [run for run in self._runs.values() if run.status in TERMINAL_RUN_STATUSES]
+        finished = [run for run in self._runs.values()
+                    if self.history is not None or run.status in TERMINAL_RUN_STATUSES]
         if not finished:
             raise AgentServiceError("capacity_reached", "待审批任务过多，请先处理现有任务", 503)
         oldest = min(finished, key=lambda run: run.updated_at)
         del self._runs[oldest.id]
+        self._storage_failures.discard(oldest.id)
 
     async def _start(self, session_id: str, operation: RunOperation) -> ServiceRun:
         self._require_idle()
@@ -181,7 +218,7 @@ class AgentServiceApplication:
 
         def started(run_id: str) -> None:
             nonlocal run
-            run = ServiceRun(id=run_id, session_id=session_id)
+            run = self.get(run_id) if self.history is not None else ServiceRun(id=run_id, session_id=session_id)
             self._runs[run_id] = run
             ready.set_result(run)
 
@@ -211,6 +248,10 @@ class AgentServiceApplication:
             error = AgentServiceError("execution_failed", "任务启动或执行失败", 500)
             if isinstance(exc, ValueError):
                 error = AgentServiceError("invalid_state", "会话或审批状态不符，请重新查询后操作")
+            if isinstance(exc, RunPersistenceError):
+                error = AgentServiceError("run_storage_failed", "运行记录保存失败，已停止继续执行", 503)
+                if run is not None:
+                    self._storage_failures.add(run.id)
             if not ready.done():
                 ready.set_exception(error)
             if run is not None:

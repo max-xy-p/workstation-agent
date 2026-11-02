@@ -18,7 +18,7 @@ from . import __version__
 from .bootstrap import build_tool_application
 from .config import Settings
 from .context.config import ContextConfigurationError
-from .context.state import TaskBoard
+from .domain.task_status import TaskBoard
 from .domain.runs import Run
 from .tools import ToolResult
 

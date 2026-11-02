@@ -204,6 +204,10 @@ class PostgresConversationRepository:
         with self.database.transaction(write=True) as connection:
             assert connection is not None
             self._check(connection, session_id, revision)
+            connection.execute(
+                "DELETE FROM workstation.runs WHERE workspace_id=%s AND scope=%s AND session_id=%s",
+                (self.database.workspace_id, self.scope, session_id),
+            )
             connection.execute("DELETE FROM workstation.conversations WHERE scope=%s AND id=%s", (self.scope, session_id))
 
     def clear(self, session_id: str) -> None:

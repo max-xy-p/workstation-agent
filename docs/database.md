@@ -33,7 +33,7 @@ uv run workstation-agent doctor --database
 
 | 数据 | 保存位置 | 管理方式 |
 | --- | --- | --- |
-| Run / Step | `workstation.runs` | JSONB 结果，仍需显式注入 Repository；HTTP 最近运行列表在内存 |
+| Run / Step | `workstation.runs` | JSONB 保存状态、步骤和任务进度；CLI/HTTP 自动写入，按身份和工作区隔离，HTTP 提供历史分页与删除 |
 | 会话与文本 | `workstation.conversations`、`conversation_messages` | 标题、版本、用户输入和最终答复，支持 [HTTP CRUD](agent-service.md#会话与消息接口) |
 | 长期记忆 | `workstation.memory_records`、`memory_scopes`、`memory_batches` | TEXT 正文、版本、来源、批次与遗忘保护 |
 | RAG | `workstation.rag_documents` | 完整文档快照，包含原文块与派生数据 |
@@ -56,6 +56,8 @@ uv run workstation-agent doctor --database
 
 - `005_postgresql.sql` 创建 PostgreSQL 业务表。
 - `006_conversations.sql` 新增会话与文本消息表。
+- `007_run_history.sql` 为运行记录增加用户与项目范围及历史查询索引。旧运行保留在空范围，因缺少可信身份不自动归入当前会话；
+  已有会话消息和官方检查点不受影响，升级后的新运行按当前身份保存。
 - 历史 001–004 是 SQLite 结构记录，不用于 PostgreSQL 初始化。
 - 检查点迁移由官方组件在 `workstation_checkpoints.checkpoint_migrations` 中独立管理。
 

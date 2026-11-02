@@ -6,14 +6,15 @@ import { isActive } from '../api/contracts';
 export const statusName: Record<Run['status'], string> = {
   created: '准备中', preparing: '准备中', thinking: '运行中', acting: '运行中', observing: '运行中',
   waiting_approval: '等待审批', waiting_user: '等待回复', completed: '已完成', failed: '执行失败',
-  cancelled: '已取消', limit_reached: '达到限制',
+  cancelled: '已取消', limit_reached: '达到限制', interrupted: '已中断',
 };
 const itemNames = { pending: '待开始', in_progress: '进行中', pending_confirmation: '待验收', completed: '已验收', blocked: '有阻塞' };
 const stepName = (step: Step): string => ({ model: '调用模型', context_usage: '检查上下文预算',
   context_sources: '记录检索来源', memory_extraction: '提取长期记忆', read_text_file: '读取文本文件',
   list_files: '查看工作区目录', search_documents: '检索知识库' })[step.name] ?? step.name;
 
-export function Inspector({ run, approvals, busy, onResume, onClose }: {
+export function Inspector({ run, approvals, busy, onResume, onClose, history, onSelect, onDelete, hasMore, onMore }: {
+  history: Run[]; onSelect: (id: string) => void; onDelete: () => void; hasMore: boolean; onMore: () => void;
   run: Run | undefined; approvals: Approvals; busy: boolean;
   onResume: (decisions: Decisions) => Promise<boolean>; onClose: () => void;
 }) {
@@ -27,6 +28,15 @@ export function Inspector({ run, approvals, busy, onResume, onClose }: {
       <button className="icon-button" aria-label="收起运行详情" onClick={onClose}><X size={17} /></button>
     </header>
     <div className="inspector-scroll">
+      <section><label htmlFor="run-history">历史运行</label>
+        <select className="field" id="run-history" aria-label="选择历史运行" value={run?.id ?? ''} onChange={(event) => onSelect(event.target.value)}>
+          {!run && <option value="">请选择运行</option>}
+          {history.map((entry) => <option key={entry.id} value={entry.id}>{new Date(entry.updated_at).toLocaleString('zh-CN')} · {statusName[entry.status]}</option>)}
+        </select>
+        {hasMore && <button className="text-button" disabled={busy} onClick={onMore}>加载更早运行</button>}
+        {run && !isActive(run) && !['waiting_approval', 'waiting_user'].includes(run.status) &&
+          <button className="text-button" disabled={busy} onClick={onDelete}>删除这次运行记录</button>}
+      </section>
       <div className="run-summary"><span className={`status-pill ${status ?? 'idle'}`}>
         {status && ['thinking', 'preparing', 'acting', 'observing'].includes(status) ? <LoaderCircle size={13} className="spin" /> : <span className="status-dot" />}
         {status ? statusName[status] : '尚未运行'}</span>

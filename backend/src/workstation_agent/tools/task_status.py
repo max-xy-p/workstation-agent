@@ -11,14 +11,8 @@ from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from pydantic import Field, JsonValue
 
-from ..context.state import (
-    ContextAgentState,
-    ContextRuntime,
-    TaskBoard,
-    TaskFact,
-    TaskItem,
-    utc_now,
-)
+from ..context.state import ContextAgentState, ContextRuntime, utc_now
+from ..domain.task_status import TaskBoard, TaskFact, TaskItem
 from ..safety import AllowSafeReadsPolicy, PermissionLevel
 from .contracts import PydanticTool, ToolArguments, ToolError
 from .executor import ToolExecutor

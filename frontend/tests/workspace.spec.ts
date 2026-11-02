@@ -53,7 +53,7 @@ test('真实 HTTP 客户端使用读取版本，冲突后不盲目覆盖，令�
     if (path === '/api/sessions') body = { items: [chat], next_offset: null };
     else if (path.endsWith('/messages')) body = { items: [message], next_offset: null };
     else if (path.endsWith('/approvals')) body = {};
-    else if (path === '/api/runs') body = [];
+    else if (path === '/api/runs') body = { items: [], next_offset: null };
     else body = chat;
     await route.fulfill({ json: body });
   });

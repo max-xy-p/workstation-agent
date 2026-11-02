@@ -16,6 +16,20 @@ test('真实后端：会话、任务、审批、历史修改与删除', async ({
   await page.getByRole('radio', { name: '拒绝', exact: true }).check();
   await page.getByRole('button', { name: '提交决定', exact: true }).click();
   await expect(page.getByText('后端联调完成', { exact: true })).toBeVisible({ timeout: 15000 });
+  const runId = await page.getByLabel('选择历史运行').inputValue();
+  // 页面刷新后重新认证，运行详情必须从真实后端重新读取。
+  await page.reload();
+  await page.getByRole('button', { name: '连接本机 Agent', exact: true }).click();
+  await page.getByLabel('访问令牌', { exact: true }).fill(process.env.WORKSTATION_AGENT_E2E_TOKEN ?? '');
+  await page.getByRole('button', { name: '连接服务', exact: true }).last().click();
+  await expect(page.getByText('后端联调完成', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '切换运行详情', exact: true }).click();
+  await expect(page.getByLabel('选择历史运行')).toHaveValue(runId);
+  await expect(page.locator('.step-list li')).not.toHaveCount(0);
+  await page.getByRole('button', { name: '删除这次运行记录', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.getByText('后端联调完成', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('选择历史运行').locator('option')).toHaveCount(1);
   await page.getByRole('button', { name: '补充背景', exact: true }).click();
   await page.getByLabel('消息内容').fill('这是通过真实 HTTP 保存的背景。');
   await page.getByRole('button', { name: '保存', exact: true }).click();

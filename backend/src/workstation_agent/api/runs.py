@@ -4,7 +4,13 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .conversations import Content, SessionId
+from .conversations import Content, SessionId, PageRequest
+
+
+class RunQuery(PageRequest):
+    """分页查询当前身份可见的运行，可进一步限制到一个会话。"""
+
+    session_id: SessionId | None = None
 
 
 class SubmitTask(BaseModel):

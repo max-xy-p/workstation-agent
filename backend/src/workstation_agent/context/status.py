@@ -9,7 +9,8 @@ from hashlib import sha256
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolCall, ToolMessage
 
 from .selection import rag_evidence
-from .state import ContextRuntime, ResultReference, TaskBoard, restore_board, utc_now
+from .state import ContextRuntime, restore_board, utc_now
+from ..domain.task_status import ResultReference, TaskBoard
 
 
 def initialize(

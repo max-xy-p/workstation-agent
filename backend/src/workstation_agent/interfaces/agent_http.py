@@ -23,9 +23,9 @@ from ..application.agent_service import AgentServiceApplication, AgentServiceErr
 from ..application.service import AgentApplication
 from ..application.conversations import ConversationApplication
 from ..api.conversations import CreateSession, RenameSession, WriteMessage, PageRequest, Page, SessionId
-from ..api.runs import SubmitTask, ResumeTask
+from ..api.runs import SubmitTask, ResumeTask, RunQuery
 from ..domain.conversations import Conversation, ConversationMessage
-from ..bootstrap import build_agent_application, build_conversation_application
+from ..bootstrap import build_agent_application, build_conversation_application, build_run_application
 from ..config import Settings
 from ..memory.service import redact
 from ..tools.contracts import ToolError
@@ -85,7 +85,11 @@ def build_agent_service(
         async with factory() as application:
             conversations = build_conversation_application(settings)
             application.history = conversations
-            manager = AgentServiceApplication(application)
+            runs = build_run_application(settings)
+            await asyncio.to_thread(runs.initialize)
+            application.repository = runs
+            await application.recover_runs()
+            manager = AgentServiceApplication(application, history=runs)
             try:
                 yield {"agent": manager, "conversations": conversations}
             finally:
@@ -186,12 +190,20 @@ def build_agent_service(
         return run_response(run, 202)
 
     async def listing(request: Request[ServiceState]) -> JSONResponse:
-        runs = request.state["agent"].list_runs()
-        value = TypeAdapter(JsonValue).validate_json(TypeAdapter(list[ServiceRun]).dump_json(runs))
-        return response(value)
+        try:
+            data = RunQuery.model_validate(dict(request.query_params))
+        except ValidationError:
+            raise HTTPException(422, "运行查询参数无效") from None
+        runs = await asyncio.to_thread(lambda: request.state["agent"].list_runs(data, session_id=data.session_id))
+        return typed_response(runs, TypeAdapter(Page[ServiceRun]))
 
     async def get(request: Request[ServiceState]) -> JSONResponse:
-        return run_response(request.state["agent"].get(request.path_params["run_id"]))
+        run = await asyncio.to_thread(lambda: request.state["agent"].get(request.path_params["run_id"]))
+        return run_response(run)
+
+    async def delete_run(request: Request[ServiceState]) -> JSONResponse:
+        await request.state["agent"].delete(request.path_params["run_id"])
+        return response({"deleted": request.path_params["run_id"]})
 
     async def cancel(request: Request[ServiceState]) -> JSONResponse:
         accepted = request.state["agent"].cancel(request.path_params["run_id"])
@@ -213,12 +225,13 @@ def build_agent_service(
             return response({"error": "invalid_request", "message": str(exc.detail)}, exc.status_code)
         if isinstance(exc, ToolError):
             errors = {
-                "not_found": (404, "会话或消息不存在"),
+                "not_found": (404, "会话、消息或运行不存在"),
                 "revision_conflict": (409, "会话已变化，请重新读取后修改"),
                 "session_busy": (409, "会话正在运行或等待审批，请先结束运行"),
                 "message_read_only": (409, "只能编辑用户消息"),
                 "database_not_configured": (503, "数据库未配置"),
                 "database_failed": (503, "数据库操作暂不可用"),
+                "run_storage_failed": (503, "运行记录保存失败，已停止继续执行"),
             }
             status, message = errors.get(exc.code, (500, "会话操作失败"))
             return response({"error": exc.code if exc.code in errors else "internal_error", "message": message}, status)
@@ -240,6 +253,7 @@ def build_agent_service(
             Route("/runs", submit, methods=["POST"]),
             Route("/runs", listing, methods=["GET"]),
             Route("/runs/{run_id}", get, methods=["GET"]),
+            Route("/runs/{run_id}", delete_run, methods=["DELETE"]),
             Route("/runs/{run_id}/cancel", cancel, methods=["POST"]),
             Route("/sessions/{session_id}/approvals", approvals, methods=["GET"]),
             Route("/sessions/{session_id}/resume", resume, methods=["POST"]),

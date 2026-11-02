@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from .task_status import TaskBoard
+
 
 def new_id(prefix: str) -> str:
     """生成带前缀的唯一标识。"""
@@ -27,6 +29,7 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     LIMIT_REACHED = "limit_reached"
+    INTERRUPTED = "interrupted"
 
 
 TERMINAL_RUN_STATUSES = {
@@ -34,6 +37,7 @@ TERMINAL_RUN_STATUSES = {
     RunStatus.FAILED,
     RunStatus.CANCELLED,
     RunStatus.LIMIT_REACHED,
+    RunStatus.INTERRUPTED,
 }
 
 
@@ -111,6 +115,9 @@ class Run:
     answer: str | None = None
     # 可公开的失败或等待说明。
     error: str | None = None
+    # 最近完成的图节点和当时可公开的任务进度。
+    node: str | None = None
+    task_status: TaskBoard | None = None
     # 任务创建时间，使用 UTC。
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # 最近一次状态转换时间，使用 UTC。

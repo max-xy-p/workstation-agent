@@ -18,6 +18,9 @@ export function useWorkspace(gateway: AgentGateway | null) {
   const [loading, setLoading] = useState(false);
   const [pages, setPages] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [runPages, setRunPages] = useState(1);
+  const [hasMoreRuns, setHasMoreRuns] = useState(false);
+  useEffect(() => { setRunPages(1); }, [selectedId, gateway]);
   const [pulse, setPulse] = useState(0);
 
   useEffect(() => {
@@ -42,8 +45,19 @@ export function useWorkspace(gateway: AgentGateway | null) {
           const page = await gateway.sessions(offset, signal);
           loaded.push(...page.items); offset = page.next_offset;
         }
-        const nextRuns = await gateway.runs(signal);
+        const recent = await gateway.runs(0, signal);
+        const merged = new Map(recent.items.map((run) => [run.id, run]));
+        let runOffset: number | null = 0;
+        if (selectedId) {
+          for (let index = 0; index < runPages && runOffset !== null; index++) {
+            const page = await gateway.runs(runOffset, signal, selectedId);
+            page.items.forEach((run) => merged.set(run.id, run));
+            runOffset = page.next_offset;
+          }
+        }
+        const nextRuns = [...merged.values()];
         if (signal.aborted) return;
+        setHasMoreRuns(Boolean(selectedId && runOffset !== null));
         setSessions(loaded); setHasMore(offset !== null); setRuns(nextRuns);
         if (selectedId === null && loaded[0]) {
           setSelectedId(loaded[0].id);
@@ -84,13 +98,13 @@ export function useWorkspace(gateway: AgentGateway | null) {
     }
     void read();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [gateway, selectedId, pages, pulse]);
+  }, [gateway, selectedId, pages, runPages, pulse]);
 
   function select(id: string | null): void {
     setSelectedId(id); setCurrent(null); setMessages([]); setApprovals({});
   }
   function refresh(): void { setPulse((value) => value + 1); }
   function acceptRun(run: Run): void { setRuns((value) => [run, ...value.filter((item) => item.id !== run.id)]); }
-  return { sessions, selectedId, current, messages, runs, approvals, error, healthy, loading,
+  return { hasMoreRuns, moreRuns: () => setRunPages((value) => value + 1), sessions, selectedId, current, messages, runs, approvals, error, healthy, loading,
     hasMore, select, refresh, acceptRun, moreSessions: () => setPages((value) => value + 1) };
 }

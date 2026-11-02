@@ -13,6 +13,7 @@ from .application import AgentApplication, ToolApplication
 from .application.memory import MemoryApplication
 from .application.sessions import SessionApplication
 from .application.conversations import ConversationApplication
+from .application.runs import RunApplication
 from .config import Settings
 from .memory.models import MemoryRecord
 from .memory.service import MemoryService
@@ -192,10 +193,18 @@ class ConversationPolicy(MemoryApprovalPolicy):
 
     def allows(self, tool_name: str, permission: PermissionLevel, arguments: dict[str, JsonValue]) -> bool:
         return super().allows(tool_name, permission, arguments) or (
-            tool_name == "conversation_write" and permission == PermissionLevel.CONTROLLED_WRITE
+            tool_name in {"conversation_write", "run_write"} and permission == PermissionLevel.CONTROLLED_WRITE
         ) or (
-            self.delete and tool_name == "conversation_delete" and permission == PermissionLevel.DESTRUCTIVE
+            self.delete and tool_name in {"conversation_delete", "run_delete"} and permission == PermissionLevel.DESTRUCTIVE
         )
+
+
+def build_run_application(settings: Settings) -> RunApplication:
+    """组装按用户、工作区和项目隔离的运行历史，构造时不访问数据库。"""
+    return RunApplication(PostgresRunRepository(
+        database_for(settings), scope=settings.memory_access.scope().namespace,
+        secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
+    ), ConversationPolicy())
 
 
 def build_conversation_application(settings: Settings, *, approve_delete: bool = True) -> ConversationApplication:
@@ -217,7 +226,7 @@ def build_infrastructure(settings: Settings) -> Infrastructure:
     """创建工具目录和 PostgreSQL 任务存储，不打开数据库连接。"""
     return Infrastructure(
         tools=default_tools(settings.workspace, max_output_chars=settings.tool_output_chars),
-        runs=PostgresRunRepository(database_for(settings), secrets=(
+        runs=PostgresRunRepository(database_for(settings), scope=settings.memory_access.scope().namespace, secrets=(
             settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url,
         )),
     )
@@ -414,6 +423,7 @@ async def build_agent_application(
         )
         return AgentApplication(
             graph,
+            repository=build_run_application(settings),
             context=ContextBuilder(memory=memory, max_memory_chars=settings.memory.context_chars),
             checkpointer=checkpointer,
             extraction=extraction,
