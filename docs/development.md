@@ -87,6 +87,18 @@ React 管理交互，Vite 提供开发代理和构建；Zod 校验网络边界�
 依据：[React 客户端应用](https://react.dev/learn/creating-a-react-app)、[Vite](https://vite.dev/guide/)、
 [react-markdown](https://github.com/remarkjs/react-markdown)。
 
+## 外部 MCP 接入依据
+
+外部 MCP 接入复用 [MCP 2.x 官方 Client](https://py.sdk.modelcontextprotocol.io/client/) 的连接、发现和调用方法。
+本次核对的 [langchain-mcp-adapters 0.3.2 依赖声明](https://github.com/langchain-ai/langchain-mcp-adapters/blob/main/pyproject.toml)
+要求 `mcp>=1.24,<2`，不能直接用于本项目 MCP 2.x。现有 LangChain 工具包装器继续复用，
+只补连接配置、标准结果转换、本地工具白名单和审批规则；不实现传输协议或另一套 Agent 循环。
+维护时需验证标准文本/结构化结果、分页目录、HTTP/stdio 生命周期、审批前不调用远端和恢复不重复执行。
+
+`jsonschema` 从已有传递依赖提升为直接依赖，用于校验动态发现的参数 schema；不手写 JSON Schema 校验器，
+不增加服务进程或外部存储。外部 schema 引用不允许触发网络读取。当前只支持文本结果，SDK 专用业务模型在来源适配模块中复用，
+通用 MCP 和 RAG 不依赖具体业务 SDK。
+
 ## 添加能力
 
 先尝试现有框架的配置与组件组合，再用官方扩展接口，最后才补最小业务逻辑。

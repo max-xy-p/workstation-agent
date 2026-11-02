@@ -31,6 +31,10 @@ CLI / HTTP / 后续通信适配器
 同进程或 MCP → ToolApplication → ToolExecutor。图更新流只用于消费进度，不构成另一套 Agent 循环。
 普通会话 CRUD 通过应用用例和内部授权操作执行，不注册为模型可发现工具，也不自动调用模型。
 
+外部 MCP 工具由可信配置列出名称与权限，先经过本地 `ToolExecutor.execute_async` 校验和审批，再由官方 MCP Client 发出请求。
+远端业务数据在接入边界转换为工具结果；Agent 核心和 RAG 不依赖工作台 SDK。
+外部正文通过 DocumentApplication 进入共用 RagApplication，完整处理成功后由 Repository 保存索引；来源系统继续管理原始资料。
+
 ## 状态与数据
 
 | 数据 | 用途与保存位置 |

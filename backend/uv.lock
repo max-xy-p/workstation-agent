@@ -1830,6 +1830,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx2" },
+    { name = "jsonschema" },
     { name = "langchain" },
     { name = "langchain-classic" },
     { name = "langchain-openai" },
@@ -1855,6 +1856,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx2", specifier = ">=2,<3" },
+    { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "langchain", specifier = ">=1.0,<2" },
     { name = "langchain-classic", specifier = ">=1,<2" },
     { name = "langchain-openai", specifier = ">=1.0,<2" },

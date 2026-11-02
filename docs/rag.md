@@ -1,7 +1,7 @@
 # 知识库与检索
 
 RAG 管理外部 Markdown 和纯文本文档，返回可核对的原文与引用。默认结构前缀加 BM25，无需模型密钥；
-先按 [数据库部署](database.md) 配置 PostgreSQL，来源文件须位于工作区内。
+先按 [数据库部署](database.md) 配置 PostgreSQL；本地来源文件须位于工作区内，外部正文可通过下文的摄取接口提交。
 
 ## 摄取与查询
 
@@ -25,6 +25,40 @@ uv run workstation-agent run "查文档，说明工具由谁检查权限" --tran
 
 每次任务默认最多 6 次检索，相同参数的重复查询在执行前停止；多次无进展查询由次数上限兜底。
 答案质量和是否正确说明证据不足仍取决于实际模型。
+
+## 外部正文摄取
+
+外部来源不必先导出为本地文件。已启动并认证的 Agent HTTP 服务提供 `POST /knowledge/documents`，
+接收完整正文并通过 Application、内部授权工具和现有 RAG 管线保存索引；不调用聊天模型重新生成正文。
+
+```json
+{
+  "source_uri": "workstation://main/workspaces/1/notes/42",
+  "title": "数据库设计",
+  "text": "# 数据库\n项目使用 PostgreSQL。",
+  "media_type": "text/markdown",
+  "source_version": "7",
+  "metadata": {"project": "demo"}
+}
+```
+
+调用使用 [HTTP 文档](agent-service.md#启动与认证) 中的 Bearer 认证和 `Content-Type: application/json`。
+该接口表示用户明确提交正文并授权写入索引，不证明调用方填写的来源真实；正文中的已知凭据会被拒绝。
+它不会抓取 `source_uri`，也不读取本地路径。来源必须为不含凭据、查询串或片段的外部 URI，
+同一文档应始终使用稳定标识，标题或文件夹变化不应改变来源身份。
+
+`media_type` 只允许 `text/markdown` 与 `text/plain`，不再通过来源 URI 的文件后缀推断格式。
+`source_version` 可选，保存到来源元数据，不能用标签覆盖；其他标签只用于检索过滤。
+API 请求仍受 HTTP 服务的 64 KiB 正文上限约束，应用内部摄取还检查 `RAG_MAX_FILE_BYTES`。
+
+返回 `indexed` 或 `unchanged`、稳定文档 ID 和块数。同一来源的正文、标题、格式、版本、标签或处理配置变化后会重新构建，
+整篇处理成功后才替换原索引，失败保留旧版本。来源、chunks 和可选向量继续保存在现有 PostgreSQL 文档快照中，
+不新增笔记表或另一套 chunk 存储。此内部正文工具不暴露给模型，避免模型自行编造正文再当作原文证据摄取。
+
+工作台适配器以后负责校验 MCP 结果、复用 SDK 模型并构造这个输入，RAG 不依赖工作台 SDK。
+当前不自动获取或同步工作台笔记，原始内容及其权限仍由工作台管理；索引不会因远端删除或权限变化自动失效。
+来源版本目前作为标记保存，不自动比较不同版本的先后；并发摄取同一来源时以最后成功提交的内容为准。
+工作台自动同步接入时，仍需依据工作台的版本规则处理过期请求和并发更新。
 
 ## 可选混合检索
 

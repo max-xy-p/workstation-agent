@@ -245,11 +245,11 @@ try {
         from workstation_agent.agent.factory import build_agent
         from workstation_agent.application import AgentApplication
         from workstation_agent.config import Settings
-        from workstation_agent.tools.mcp_client import workstation_tools
+        from workstation_agent.tools.mcp_client import local_service_tools
 
         async def execute() -> None:
             settings = Settings(self.workspace, service_port=self.port, service_token=self.secret)
-            async with workstation_tools(settings) as tools:
+            async with local_service_tools(settings) as tools:
                 model = ScriptedModel(responses=[
                     call("ingest_document", {"path": "hello.txt"}, "index"),
                     call("delete_document", {"path": "hello.txt"}, "delete"),

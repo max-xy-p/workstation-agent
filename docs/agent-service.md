@@ -68,6 +68,11 @@ Invoke-RestMethod "$base/runs/$($run.id)" -Headers $headers
 提交成功后客户端断开不会取消运行。重试提交可能创建新任务，当前没有请求去重协议。
 `task` 最多 32000 字符；`constraints`、`criteria` 各最多 32 条，每条 1–2000 字符。
 
+## 文档摄取接口
+
+外部文本进入知识库使用 `POST /knowledge/documents`，请求结构、预算和版本替换规则见
+[外部正文摄取](rag.md#外部正文摄取)。认证沿用当前 HTTP 令牌，此接口不调用 Agent 或修改会话消息。
+
 ## 会话与消息接口
 
 会话 ID 允许 1–128 个字母、数字、下划线或连字符。服务按可信用户、工作区和项目隔离数据。

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from .context.config import ContextSettings
 from .memory.config import MemorySettings
 from .rag.config import RagSettings
+from .tools.mcp_config import MCPServerConfig, external_servers_from_env
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,14 @@ class Settings:
 
     memory: MemorySettings = field(default_factory=MemorySettings)
     context: ContextSettings = field(default_factory=ContextSettings)
+    external_mcp_servers: tuple[MCPServerConfig, ...] = ()
+
+    @property
+    def secrets(self) -> tuple[str | None, ...]:
+        """统一提供已知凭据供响应、检查点和记录脱敏，实际值不进入配置对象表示。"""
+        external = tuple(os.getenv(name) for server in self.external_mcp_servers
+                         for name in ([server.token_env] if server.token_env else []) + server.secret_env)
+        return (self.api_key, self.service_token, self.agent_service_token, self.database_url, *external)
 
     @property
     def memory_access(self):
@@ -72,6 +81,9 @@ class Settings:
         )
 
     def __post_init__(self) -> None:
+        names = [server.name for server in self.external_mcp_servers]
+        if len(names) > 16 or len(names) != len(set(names)):
+            raise ValueError("外部 MCP 服务名称必须唯一且最多配置 16 个")
         if self.database_url is not None:
             database = urlparse(self.database_url)
             if (database.scheme not in {"postgresql", "postgres"} or not database.hostname
@@ -167,4 +179,5 @@ class Settings:
             rag=RagSettings.from_env(),
             memory=MemorySettings.from_env(),
             context=ContextSettings.from_env(),
+            external_mcp_servers=external_servers_from_env(),
         )

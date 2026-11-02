@@ -22,10 +22,13 @@ from .. import __version__
 from ..application.agent_service import AgentServiceApplication, AgentServiceError, ServiceRun
 from ..application.service import AgentApplication
 from ..application.conversations import ConversationApplication
+from ..application.documents import DocumentApplication
+from ..application.rag import IngestResult
+from ..api.documents import IngestDocument
 from ..api.conversations import CreateSession, RenameSession, WriteMessage, PageRequest, Page, SessionId
 from ..api.runs import SubmitTask, ResumeTask, RunQuery
 from ..domain.conversations import Conversation, ConversationMessage
-from ..bootstrap import build_agent_application, build_conversation_application, build_run_application
+from ..bootstrap import build_agent_application, build_conversation_application, build_run_application, build_document_application
 from ..config import Settings
 from ..memory.service import redact
 from ..tools.contracts import ToolError
@@ -41,6 +44,7 @@ class ServiceState(TypedDict):
 
     agent: AgentServiceApplication
     conversations: ConversationApplication
+    documents: DocumentApplication
 
 
 async def _parse[T: BaseModel](request: Request[ServiceState], model: type[T]) -> T:
@@ -73,7 +77,7 @@ def build_agent_service(
         raise ValueError("Agent 服务需要工作区和 WORKSTATION_AGENT_HTTP_TOKEN")
     if transport == "mcp" and settings.agent_service_port == settings.service_port:
         raise ValueError("Agent HTTP 与 MCP 工具服务需要使用不同端口")
-    secrets = (settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url)
+    secrets = settings.secrets
 
     def default_factory() -> AbstractAsyncContextManager[AgentApplication]:
         return build_agent_application(settings, transport=transport, persist_session=True)
@@ -91,7 +95,8 @@ def build_agent_service(
             await application.recover_runs()
             manager = AgentServiceApplication(application, history=runs)
             try:
-                yield {"agent": manager, "conversations": conversations}
+                yield {"agent": manager, "conversations": conversations,
+                       "documents": build_document_application(settings, approve_write=True)}
             finally:
                 await manager.close()
 
@@ -189,6 +194,11 @@ def build_agent_service(
         )
         return run_response(run, 202)
 
+    async def ingest_document(request: Request[ServiceState]) -> JSONResponse:
+        document = await _parse(request, IngestDocument)
+        result = await asyncio.to_thread(lambda: request.state["documents"].ingest(document))
+        return typed_response(result, TypeAdapter(IngestResult))
+
     async def listing(request: Request[ServiceState]) -> JSONResponse:
         try:
             data = RunQuery.model_validate(dict(request.query_params))
@@ -232,6 +242,10 @@ def build_agent_service(
                 "database_not_configured": (503, "数据库未配置"),
                 "database_failed": (503, "数据库操作暂不可用"),
                 "run_storage_failed": (503, "运行记录保存失败，已停止继续执行"),
+                "permission_required": (403, "文档写入或额外模型调用尚未授权"),
+                "resource_limit": (413, "文档摄取超过预算"),
+                "unsupported_format": (422, "文档格式无效"),
+                "sensitive_content": (422, "文档包含已知凭据，已拒绝保存"),
             }
             status, message = errors.get(exc.code, (500, "会话操作失败"))
             return response({"error": exc.code if exc.code in errors else "internal_error", "message": message}, status)
@@ -251,6 +265,7 @@ def build_agent_service(
             Route("/sessions/{session_id}/messages/{message_id}", edit_message, methods=["PATCH"]),
             Route("/sessions/{session_id}/messages/{message_id}", delete_message, methods=["DELETE"]),
             Route("/runs", submit, methods=["POST"]),
+            Route("/knowledge/documents", ingest_document, methods=["POST"]),
             Route("/runs", listing, methods=["GET"]),
             Route("/runs/{run_id}", get, methods=["GET"]),
             Route("/runs/{run_id}", delete_run, methods=["DELETE"]),

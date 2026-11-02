@@ -20,7 +20,7 @@ from .config import Settings
 from .context.config import ContextConfigurationError
 from .domain.task_status import TaskBoard
 from .domain.runs import Run
-from .tools import ToolResult
+from .tools import ToolError, ToolResult
 
 _RESULT_ADAPTER = TypeAdapter(ToolResult)
 
@@ -181,6 +181,17 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
     print(f"run timeout (including approval wait): {settings.run_timeout}")
     print(f"Context task board token cap: {settings.context.board_tokens}")
     print(f"max tool calls: {settings.max_tool_calls}")
+    print(f"External MCP servers: {len(settings.external_mcp_servers)}")
+    for server in settings.external_mcp_servers:
+        from .tools.mcp_client import validate_external_server
+
+        try:
+            validate_external_server(server, settings.workspace)
+            configured = True
+        except (ValueError, ToolError):
+            configured = False
+        print(f"MCP {server.name}: {server.transport}; allowed tools: {len(server.tools)}; credential configured: {configured}")
+        ready = ready and configured
     ready = _doctor_rag(args, settings) and ready
     ready = _doctor_memory(args, settings) and ready
     if args.database:

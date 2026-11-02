@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.12,<3",
+    "jsonschema>=4.26,<5",
     "langgraph>=1.0,<2",
     "mcp>=2.3,<3",
     "uvicorn>=0.54,<1",
@@ -57,6 +58,16 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/tools/mcp_config.py",
+    "src/workstation_agent/tools/mcp_remote.py",
+    "src/workstation_agent/tools/contracts.py",
+    "src/workstation_agent/application/documents.py",
+    "tests/unit/test_external_mcp_config.py",
+    "tests/unit/test_document_ingestion.py",
+    "tests/integration/test_external_mcp.py",
+    "tests/integration/test_mcp_connections.py",
+    "tests/integration/test_local_service.py",
+    "tests/serve_external_mcp_fixture.py",
     "src/workstation_agent/domain",
     "src/workstation_agent/application/runs.py",
     "src/workstation_agent/storage/base.py",

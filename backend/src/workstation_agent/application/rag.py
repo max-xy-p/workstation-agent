@@ -105,8 +105,15 @@ class RagApplication:
         )
         return sha256(repr(parts).encode()).hexdigest()
 
-    def ingest(self, source: str, text: str, metadata: dict[str, str]) -> IngestResult:
+    def ingest(self, source: str, text: str, metadata: dict[str, str], *, title: str | None = None,
+               media_type: Literal["text/markdown", "text/plain"] | None = None) -> IngestResult:
         """处理已授权读取的文本；发布失败时保留已有版本。"""
+        if len(text.encode("utf-8")) > self.settings.max_file_bytes:
+            raise ToolError("文档正文超过摄取预算", code="resource_limit")
+        if "\0" in text:
+            raise ToolError("文档正文包含二进制内容", code="unsupported_format")
+        title = title if title is not None else source
+        media_type = media_type or ("text/markdown" if source.lower().endswith(".md") else "text/plain")
         checksum = sha256(text.encode("utf-8")).hexdigest()
         previous = self.repository.get(source)
         if (
@@ -114,6 +121,8 @@ class RagApplication:
             and previous.source.checksum == checksum
             and previous.fingerprint == self.fingerprint
             and previous.source.metadata == metadata
+            and previous.source.title == title
+            and previous.source.media_type == media_type
         ):
             return {
                 "status": "unchanged",
@@ -123,9 +132,9 @@ class RagApplication:
         document = SourceDocument(
             id=stable_id("doc", source),
             source_uri=source,
-            title=source,
+            title=title,
             checksum=checksum,
-            media_type="text/markdown" if source.lower().endswith(".md") else "text/plain",
+            media_type=media_type,
             metadata=metadata,
         )
         chunks = self._split(document, text)

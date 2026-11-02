@@ -86,7 +86,7 @@ uv run workstation-agent tool list_files
 uv run workstation-agent tool read_text_file --path README.md --trace
 ```
 
-文件工具无需模型或数据库。`tools --json` 返回当前可用工具的名称、权限和参数 schema。
+文件工具无需模型或数据库。`tools --json` 返回本项目工具的名称、权限和参数 schema；外部 MCP 工具在启动 Agent 时另行发现和加载。
 结果为 ToolResult：`tool_name`、`content`、`success`、`error`、`error_code`。
 退出码为 0 成功、1 执行错误、2 请求或配置错误、3 需要授权。
 
@@ -95,12 +95,55 @@ uv run workstation-agent tool read_text_file --path README.md --trace
 `read_text_file` 支持 `offset`、`limit` 和 `expected_version` 分段读取；文件变化返回 `source_changed`。
 RAG 和记忆工具的授权分别见其使用文档，通用文件写入与 Shell 尚未提供。
 
+## 接入外部 MCP 服务
+
+Agent 可同时使用自己的文件/知识库工具和外部 MCP 工具。设置 `WORKSTATION_AGENT_MCP_SERVERS` 为 JSON 数组，
+每个服务指定唯一 `name` 和明确的工具权限；默认值 `[]` 不连接外部服务。以下工具名仅说明配置方式，实际名称以更新后的服务目录为准：
+
+```powershell
+$env:WORKSTATION_AGENT_MCP_SERVERS = '[{"name":"workstation","transport":"streamable-http","url":"http://127.0.0.1:8000/mcp","tools":{"get_note":"read","create_note":"write","delete_note":"delete"}}]'
+uv run workstation-agent doctor
+uv run workstation-agent run "查询工作台中的笔记" --transport local --session notes
+```
+
+`--transport local` 表示本项目工具在同进程执行，不会关闭外部 MCP；`--transport mcp` 则另需启动下文的本机工具服务。
+HTTP 服务如需 Bearer 认证，增加 `"token_env":"MY_MCP_TOKEN"`，再通过进程环境注入 `MY_MCP_TOKEN`，不将令牌直接填入 JSON。
+仅本机地址允许 HTTP，其他地址必须 HTTPS；不接受 URL 凭据或查询参数，不继承系统代理、不跟随 HTTP 重定向。
+工作台后端的 OAuth 凭据仍由工作台 MCP Server 管理，Agent 不代替它登录业务服务。
+
+stdio 服务可配置 `{"name":"workstation","transport":"stdio","command":"uv","args":["--directory","你的服务目录","run","workstation-mcp-server"],"tools":{"get_note":"read"}}`。
+`command` 和 `args` 是可信启动配置，不接受模型修改，不经过 shell；普通环境变量用 `env` 数组列出名称，
+密钥变量用 `secret_env` 数组列出名称。两者都会传给子进程，只有密钥值加入脱敏范围，避免把普通项目编号等内容误删。
+`cwd` 默认 `.`，必须是 Agent 工作区内的目录；带路径的 `command` 也限制在工作区，普通命令名从 PATH 查找。
+子进程错误日志不直接展示，避免凭据通过服务日志泄漏；启动异常需在服务自己的环境中排查。
+
+工具以 `服务名__工具名` 暴露给模型。只有 `tools` 白名单中的工具会被加载：
+
+| 权限值 | 调用行为 |
+| --- | --- |
+| `read` | 按默认只读策略执行 |
+| `write` | 发出请求前进入写入审批 |
+| `sensitive` | 发出请求前进入敏感操作审批 |
+| `delete` | 发出请求前进入破坏性操作审批 |
+
+远端的只读/破坏性注解不决定本地授权。批准只绑定本次公开工具名与原始参数，拒绝不会调用远端；
+审批恢复沿用现有检查点机制。远端仍负责业务身份、工作区权限和版本冲突检查，Agent 的批准不会替代这些校验。
+工具目录在启动时读取；服务升级、工具 schema 或本地配置变化后，重启 Agent 重新加载，不在运行中自动切换工具契约。
+
+标准服务可以返回 MCP 文本、内嵌文本资源或 `structured_content`，不必实现本项目的 `ToolResult`。
+有结构化结果时优先使用它，当前不支持图像、音频及二进制结果，不自动跟随资源链接。
+参数使用 JSON Schema 校验，不允许 schema 从外部地址加载引用。结果有字符预算和已知凭据脱敏，远程原始错误不会直接交给模型。
+读取结果会进入配置的模型请求；外部取消依赖服务响应 MCP 取消，不能保证已发生的操作被撤销。
+
+当前只完成通用接入与文本摄取基础。工作台 SDK 专用解析、笔记获取后自动摄取和版本同步待工作台 MCP 契约更新后接入；
+可先用 [正文摄取接口](rag.md#外部正文摄取) 验证现有 RAG 管线。
+
 ## 本机 MCP 服务
 
 `serve` 只提供工作站工具，默认地址为 `http://127.0.0.1:8765/mcp`；
 `serve-agent` 提供完整任务与会话 HTTP 接口，见 [HTTP 文档](agent-service.md)。
 
-在 Windows PowerShell 7 中，从项目根目录启动工具服务：
+在 Windows PowerShell 7 中，从 `backend/` 目录启动工具服务：
 
 ```powershell
 $service = & .\scripts\start-local-service.ps1

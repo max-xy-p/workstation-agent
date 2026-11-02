@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from ..safety.permissions import PermissionLevel
 
@@ -56,6 +56,16 @@ class ToolRequest(BaseModel):
     arguments: dict[str, Any]
 
 
+class AsyncTool(Protocol):
+    """异步工具提供完整参数校验和调用方法，由 ToolExecutor 在发出请求前授权。"""
+
+    @property
+    def definition(self) -> ToolDefinition: ...
+    permission: PermissionLevel
+    def validate_arguments(self, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]: ...
+    async def ainvoke(self, arguments: dict[str, JsonValue]) -> str: ...
+
+
 class ToolArguments(BaseModel):
     """提供工具参数的公共校验配置。"""
 
@@ -70,7 +80,7 @@ class ValidatedTool(Protocol):
     def validate_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]: ...
 
 
-class PydanticTool[ArgumentsT: ToolArguments](ABC):
+class PydanticTool[ArgumentsT: BaseModel](ABC):
     """提供参数校验和参数说明生成，子类实现具体操作。"""
 
     # 工具的唯一名称。

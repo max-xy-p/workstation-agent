@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, JsonValue
 from pydantic.dataclasses import dataclass
 
 from ..safety.permissions import ApprovalPolicy, PermissionRequired
-from .contracts import ToolError, ValidatedTool
+from .contracts import AsyncTool, ToolError, ValidatedTool
 from .execution import GRANT, ToolGrant, check_execution
 from .registry import ToolRegistry
 
@@ -93,3 +93,22 @@ class ToolExecutor:
             # 异常消息可能包含凭据、本机路径和第三方输出，不得直接返回。
             return self._failure(name, "execution_failed", "tool execution failed")
         return ToolResult(tool_name=name, content=self._bound(content))
+
+    async def execute_async(self, tool: AsyncTool, arguments: dict[str, JsonValue]) -> ToolResult:
+        """校验已发现的异步工具后授权，再发出远程请求；审批前不会试调用远端。"""
+        name = tool.definition.name
+        try:
+            check_execution()
+            requested = ToolGrant.for_call(name, arguments)
+            validated = tool.validate_arguments(arguments)
+            if GRANT.get() != requested and not self.approval_policy.allows(name, tool.permission, validated):
+                raise PermissionRequired("远程工具需要审批")
+            check_execution()
+            content = await tool.ainvoke(validated)
+            return ToolResult(name, self._bound(content))
+        except PermissionRequired:
+            raise
+        except ToolError as exc:
+            return self._failure(name, exc.code, str(exc))
+        except Exception:
+            return self._failure(name, "execution_failed", "远程工具执行失败")

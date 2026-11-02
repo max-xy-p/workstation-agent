@@ -1,7 +1,7 @@
 """组装应用与外围适配器，不在构造只读入口时创建索引。"""
 
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -14,6 +14,8 @@ from .application.memory import MemoryApplication
 from .application.sessions import SessionApplication
 from .application.conversations import ConversationApplication
 from .application.runs import RunApplication
+from .application.rag import RagApplication
+from .application.documents import DocumentApplication
 from .config import Settings
 from .memory.models import MemoryRecord
 from .memory.service import MemoryService
@@ -66,7 +68,7 @@ class RagApprovalPolicy(AllowSafeReadsPolicy):
             super().allows(tool_name, permission, arguments)
             or (
                 self.approve_write
-                and tool_name in {"ingest_document", "delete_document"}
+                and tool_name in {"ingest_document", "delete_document", "ingest_external_document"}
                 and permission == PermissionLevel.CONTROLLED_WRITE
             )
             or (
@@ -138,7 +140,7 @@ def _memory_service(
         ),
         retrieval=retrieval if retrieval is not None else MemoryRetrievalStrategy(),
         max_records=settings.memory.max_records,
-        secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
+        secrets=settings.secrets,
     )
 
 
@@ -177,7 +179,7 @@ def build_session_application(settings: Settings, *, approve_delete: bool = Fals
     saver = AuthorizedCheckpointer(
         PostgresSessionBackend(
             database_for(settings),
-            secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
+            secrets=settings.secrets,
         ),
         settings.memory_access,
         MemoryApprovalPolicy(delete=approve_delete),
@@ -203,7 +205,7 @@ def build_run_application(settings: Settings) -> RunApplication:
     """组装按用户、工作区和项目隔离的运行历史，构造时不访问数据库。"""
     return RunApplication(PostgresRunRepository(
         database_for(settings), scope=settings.memory_access.scope().namespace,
-        secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
+        secrets=settings.secrets,
     ), ConversationPolicy())
 
 
@@ -214,7 +216,7 @@ def build_conversation_application(settings: Settings, *, approve_delete: bool =
     from .tools.checkpoints import AuthorizedCheckpointer
 
     policy = ConversationPolicy(approve_delete=approve_delete)
-    secrets = (settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url)
+    secrets = settings.secrets
     return ConversationApplication(
         PostgresConversationRepository(database_for(settings), settings.memory_access.scope().namespace),
         AuthorizedCheckpointer(PostgresSessionBackend(database_for(settings), secrets=secrets), settings.memory_access, policy),
@@ -226,39 +228,21 @@ def build_infrastructure(settings: Settings) -> Infrastructure:
     """创建工具目录和 PostgreSQL 任务存储，不打开数据库连接。"""
     return Infrastructure(
         tools=default_tools(settings.workspace, max_output_chars=settings.tool_output_chars),
-        runs=PostgresRunRepository(database_for(settings), scope=settings.memory_access.scope().namespace, secrets=(
-            settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url,
-        )),
+        runs=PostgresRunRepository(database_for(settings), scope=settings.memory_access.scope().namespace, secrets=settings.secrets),
     )
 
 
-def build_tool_application(
-    settings: Settings,
-    *,
-    approve_rag_write: bool = False,
-    rag_backend: RagBackend | None = None,
-    approve_memory_write: bool = False,
-    approve_memory_delete: bool = False,
-    memory_retrieval: RetrievalStrategy[MemoryRecord] | None = None,
+def build_rag_application(
+    settings: Settings, *, rag_backend: RagBackend | None = None,
     knowledge_retrieval: RetrievalStrategy[IndexSnapshot] | None = None,
     chunking: ChunkingStrategy | None = None,
-) -> ToolApplication:
-    """创建统一工具入口，RAG 默认只读，模型出站单独授权。"""
-    from .application.rag import RagApplication
+) -> RagApplication:
+    """组合所有摄取入口共用的 RAG 管线，构造时不读取文档或调用外部模型。"""
     from .rag.chunking.structured import StructuredChunkingStrategy
     from .rag.retriever import KnowledgeRetrievalStrategy
     from .storage.postgres.rag import PostgresIndexRepository
-    from .tools.builtin.rag import (
-        AuthorizedBackend,
-        DeleteDocumentTool,
-        IngestDocumentTool,
-        RagModelTool,
-        RagStatusTool,
-        SearchDocumentsTool,
-    )
+    from .tools.builtin.rag import AuthorizedBackend, RagModelTool
 
-    registry = default_tools(settings.workspace, max_output_chars=settings.tool_output_chars)
-    tools = [registry.get(definition.name) for definition in registry.definitions]
     backend = None
     if settings.rag.embedding_model or settings.rag.context_model:
         if rag_backend is None:
@@ -285,6 +269,38 @@ def build_tool_application(
         ),
         chunking=chunking if chunking is not None else StructuredChunkingStrategy(settings.rag),
     )
+    return rag
+
+
+def build_document_application(settings: Settings, *, approve_write: bool = False) -> DocumentApplication:
+    """组装显式正文摄取用例，任意正文写入工具不进入模型目录。"""
+    from .tools.builtin.rag import IngestExternalDocumentTool
+
+    tool = IngestExternalDocumentTool(build_rag_application(settings), secrets=settings.secrets)
+    return DocumentApplication(ToolApplication(ToolExecutor(
+        ToolRegistry((tool,)), RagApprovalPolicy(approve_write=approve_write),
+        max_output_chars=max(settings.tool_output_chars, 4096),
+    )))
+
+
+def build_tool_application(
+    settings: Settings,
+    *,
+    approve_rag_write: bool = False,
+    rag_backend: RagBackend | None = None,
+    approve_memory_write: bool = False,
+    approve_memory_delete: bool = False,
+    memory_retrieval: RetrievalStrategy[MemoryRecord] | None = None,
+    knowledge_retrieval: RetrievalStrategy[IndexSnapshot] | None = None,
+    chunking: ChunkingStrategy | None = None,
+) -> ToolApplication:
+    """创建统一工具入口，RAG 默认只读，模型出站单独授权。"""
+    from .tools.builtin.rag import DeleteDocumentTool, IngestDocumentTool, RagStatusTool, SearchDocumentsTool
+
+    registry = default_tools(settings.workspace, max_output_chars=settings.tool_output_chars)
+    tools = [registry.get(definition.name) for definition in registry.definitions]
+    rag = build_rag_application(settings, rag_backend=rag_backend,
+                                knowledge_retrieval=knowledge_retrieval, chunking=chunking)
     tools.extend(
         (
             IngestDocumentTool(settings.workspace, rag),
@@ -365,7 +381,7 @@ async def build_agent_application(
     from .context import ContextBuilder
     from .models.providers.openai import build_chat_model
     from .tools.langchain import local_tools
-    from .tools.mcp_client import workstation_tools
+    from .tools.mcp_client import local_service_tools, external_tools
 
     model = build_chat_model(settings)
     memory = (
@@ -391,7 +407,7 @@ async def build_agent_application(
         checkpointer = AuthorizedCheckpointer(
             PostgresSessionBackend(
                 database_for(settings),
-                secrets=(settings.api_key, settings.service_token, settings.agent_service_token, settings.database_url),
+                secrets=settings.secrets,
             ),
             settings.memory_access,
             policy,
@@ -431,19 +447,18 @@ async def build_agent_application(
             history=build_conversation_application(settings) if checkpointer is not None else None,
         )
 
-    if transport == "mcp":
-        async with workstation_tools(settings) as tools:
-            yield application(tools)
-    elif transport == "local":
-        yield application(
-            local_tools(
-                build_tool_application(
-                    settings,
-                    memory_retrieval=memory_retrieval,
-                    knowledge_retrieval=knowledge_retrieval,
-                    chunking=chunking,
-                )
-            )
-        )
-    else:
-        raise ValueError("未知工具传输方式")
+    async with AsyncExitStack() as stack:
+        if transport == "mcp":
+            tools = await stack.enter_async_context(local_service_tools(settings))
+        elif transport == "local":
+            tools = local_tools(build_tool_application(
+                settings, memory_retrieval=memory_retrieval,
+                knowledge_retrieval=knowledge_retrieval, chunking=chunking,
+            ))
+        else:
+            raise ValueError("未知工具传输方式")
+        tools.extend(await stack.enter_async_context(external_tools(settings)))
+        names = [tool.name for tool in tools]
+        if len(names) != len(set(names)):
+            raise ValueError("本机与外部 MCP 工具名称冲突")
+        yield application(tools)

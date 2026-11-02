@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from ...application.rag import RagApplication
+from ...api.documents import IngestDocument
 from ...safety.permissions import PermissionLevel
 from ..contracts import PydanticTool, ToolArguments, ToolError
 from ..executor import ToolExecutor
@@ -126,6 +127,32 @@ class IngestDocumentTool(PydanticTool[IngestArguments]):
         return json.dumps(
             self.application.ingest(source, text, arguments.metadata), ensure_ascii=False
         )
+
+
+class IngestExternalDocumentTool(PydanticTool[IngestDocument]):
+    """只供应用调用的摄取工具，正文来自用户或来源适配器，不加入模型可发现目录。"""
+
+    name = "ingest_external_document"
+    description = "Index an explicitly supplied external text document."
+    permission = PermissionLevel.CONTROLLED_WRITE
+    arguments_model = IngestDocument
+
+    def __init__(self, application: RagApplication, *, secrets: tuple[str | None, ...] = ()) -> None:
+        self.application: RagApplication = application
+        self.secrets = secrets
+
+    def run(self, arguments: IngestDocument) -> str:
+        values = (arguments.source_uri, arguments.title, arguments.text, arguments.source_version or "",
+                  *arguments.metadata.keys(), *arguments.metadata.values())
+        if any(secret and secret in value for secret in self.secrets for value in values):
+            raise ToolError("文档包含已知凭据，拒绝摄取", code="sensitive_content")
+        metadata = dict(arguments.metadata)
+        if arguments.source_version is not None:
+            metadata["source_version"] = arguments.source_version
+        return json.dumps(self.application.ingest(
+            arguments.source_uri, arguments.text, metadata,
+            title=arguments.title, media_type=arguments.media_type,
+        ), ensure_ascii=False)
 
 
 class SearchDocumentsTool(PydanticTool[SearchArguments]):

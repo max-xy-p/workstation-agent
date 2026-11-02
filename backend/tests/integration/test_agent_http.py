@@ -21,7 +21,7 @@ from tests.unit.test_execution_control import CountingTool, EchoArguments
 from workstation_agent.agent.factory import build_agent
 from workstation_agent.application import AgentApplication, ToolApplication
 from workstation_agent.application.agent_service import ServiceRun
-from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for, build_run_application
+from workstation_agent.bootstrap import MemoryApprovalPolicy, database_for, build_run_application, build_rag_application, build_tool_application
 from workstation_agent.config import Settings
 from workstation_agent.domain.runs import Run, RunStatus, Step, StepKind
 from workstation_agent.storage.postgres.runs import PostgresRunRepository
@@ -217,6 +217,29 @@ class AgentHttpTests(unittest.TestCase):
                 self.assertIn("保存失败", failed.error or "")
                 self.assertEqual(client.get("/runs").json()["items"][0]["status"], "failed")
             self.assertEqual(tool.calls, [])
+
+    def test_external_document_ingestion_uses_explicit_media_and_version(self) -> None:
+        source = "external://fixture/workspaces/1/notes/42"
+        document = {"source_uri": source, "title": "工作台资料", "text": "# 数据库\n项目使用 PostgreSQL。",
+                    "media_type": "text/markdown", "source_version": "1"}
+        with self.client([AIMessage(content="未调用")]) as client:
+            created = client.post("/knowledge/documents", json=document)
+            self.assertEqual(created.status_code, 200, created.text)
+            self.assertEqual(created.json()["status"], "indexed")
+            self.assertEqual(client.post("/knowledge/documents", json=document).json()["status"], "unchanged")
+            changed = client.post("/knowledge/documents", json={**document, "text": "# 新资料\n保存到 PostgreSQL。", "source_version": "2"})
+            self.assertEqual(changed.status_code, 200)
+            self.assertEqual(changed.json()["document_id"], created.json()["document_id"])
+            saved = build_rag_application(self.settings).repository.get(source)
+            assert saved is not None
+            self.assertEqual(saved.source.media_type, "text/markdown")
+            self.assertEqual(saved.source.metadata["source_version"], "2")
+            self.assertEqual(saved.source.title, document["title"])
+            for invalid in ({**document, "source_uri": "../outside.md"}, {**document, "media_type": "application/pdf"},
+                            {**document, "text": self.settings.agent_service_token}):
+                self.assertEqual(client.post("/knowledge/documents", json=invalid).status_code, 422)
+            self.assertEqual(client.get("/runs").json()["items"], [])
+            self.assertNotIn("ingest_external_document", {tool.name for tool in build_tool_application(self.settings).list_tools()})
 
     def test_builder_rejects_missing_credentials_and_conflicting_ports(self) -> None:
         with self.assertRaises(ValueError):
