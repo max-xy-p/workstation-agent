@@ -22,11 +22,13 @@ class ToolGrant(BaseModel):
     fingerprint: str
 
     @classmethod
-    def for_call(cls, name: str, arguments: dict[str, JsonValue]) -> "ToolGrant":
-        """把参数规范化为稳定 JSON，再计算绑定指纹。"""
+    def for_call(cls, name: str, arguments: dict[str, JsonValue], *, context: str | None = None) -> "ToolGrant":
+        """将原始参数及可选的可信来源上下文规范化后计算指纹，来源不由模型填写。"""
         payload = json.dumps(
             arguments, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         )
+        if context is not None:
+            payload = json.dumps([context, payload], ensure_ascii=False, separators=(",", ":"))
         return cls(name=name, fingerprint=hashlib.sha256(payload.encode()).hexdigest())
 
 

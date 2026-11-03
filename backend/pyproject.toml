@@ -27,6 +27,12 @@ dependencies = [
 [project.scripts]
 workstation-agent = "workstation_agent.cli:main"
 
+[project.optional-dependencies]
+workstation = ["workstation-api-client==5.0.0"]
+
+[tool.uv.sources]
+workstation-api-client = { path = "../../../workstation/clients/python" }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -49,6 +55,7 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pyright>=1.1.414",
+    "workstation-api-client==5.0.0",
 ]
 
 [tool.pyright]
@@ -58,6 +65,11 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/integrations",
+    "tests/workstation_support.py",
+    "tests/integration/test_workstation_notes.py",
+    "tests/integration/test_workstation_pipeline.py",
+    "tests/unit/test_workstation_config.py",
     "src/workstation_agent/tools/mcp_config.py",
     "src/workstation_agent/tools/mcp_remote.py",
     "src/workstation_agent/tools/contracts.py",

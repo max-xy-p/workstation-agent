@@ -1,8 +1,9 @@
 """使用官方 MCP 客户端组合内部工具服务与可配置外部服务，不实现协议传输。"""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 import os
+from hashlib import sha256
 from pathlib import Path
 
 import httpx2
@@ -18,6 +19,9 @@ from .builtin.workspace import resolve_inside
 from .langchain import make_langchain_tool
 from .mcp_config import MCPServerConfig, PERMISSIONS
 from .mcp_remote import RemoteMCPTool, public_tool_name, remote_invocation
+from .contracts import AsyncTool
+
+type MCPToolExtension = Callable[[Mapping[str, RemoteMCPTool]], Sequence[AsyncTool]]
 
 
 async def _catalog(client: Client) -> list[Tool]:
@@ -108,11 +112,12 @@ async def _external_client(stack: AsyncExitStack, server: MCPServerConfig, works
 
 
 @asynccontextmanager
-async def external_tools(settings: Settings) -> AsyncIterator[list[StructuredTool]]:
+async def external_tools(settings: Settings, *, extension: MCPToolExtension | None = None) -> AsyncIterator[list[StructuredTool]]:
     """只适配配置白名单中的工具，远端注解不会降低本地权限，退出时关闭全部连接。"""
     stack = AsyncExitStack()
     try:
         tools: list[StructuredTool] = []
+        remotes: dict[str, RemoteMCPTool] = {}
         try:
             for server in settings.external_mcp_servers:
                 client, credentials = await _external_client(stack, server, settings.workspace, settings.model_timeout)
@@ -121,8 +126,16 @@ async def external_tools(settings: Settings) -> AsyncIterator[list[StructuredToo
                     raise ValueError("MCP 配置中的工具不在远端目录中")
                 for name, permission in server.tools.items():
                     remote = RemoteMCPTool(client, catalog[name], public_tool_name(server.name, name), PERMISSIONS[permission],
-                                           secrets=(*credentials, *settings.secrets))
+                                           secrets=(*credentials, *settings.secrets), approval_context=sha256(
+                                               (server.model_dump_json() + catalog[name].model_dump_json()).encode()
+                                           ).hexdigest())
+                    if remote.definition.name in remotes:
+                        raise ValueError("MCP 工具公开名称冲突")
+                    remotes[remote.definition.name] = remote
                     tools.append(make_langchain_tool(remote.definition, remote_invocation(remote, settings.tool_output_chars)))
+            if extension is not None:
+                tools.extend(make_langchain_tool(tool.definition, remote_invocation(tool, settings.tool_output_chars))
+                             for tool in extension(remotes))
             names = [tool.name for tool in tools]
             if len(names) != len(set(names)):
                 raise ValueError("MCP 工具公开名称冲突")

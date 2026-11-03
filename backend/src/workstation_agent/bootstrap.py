@@ -1,6 +1,6 @@
 """组装应用与外围适配器，不在构造只读入口时创建索引。"""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -27,6 +27,8 @@ from .safety import AllowSafeReadsPolicy
 from .safety.permissions import PermissionLevel
 from .storage import PostgresDatabase, PostgresRunRepository
 from .tools import ToolExecutor, ToolRegistry, default_tools
+from .tools.contracts import AsyncTool
+from .tools.mcp_remote import RemoteMCPTool, public_tool_name
 
 if TYPE_CHECKING:
     from .application.database import DatabaseApplication
@@ -457,7 +459,19 @@ async def build_agent_application(
             ))
         else:
             raise ValueError("未知工具传输方式")
-        tools.extend(await stack.enter_async_context(external_tools(settings)))
+        def source_tools(remotes: Mapping[str, RemoteMCPTool]) -> Sequence[AsyncTool]:
+            binding = settings.workstation_notes
+            if binding is None:
+                return ()
+            from .integrations.workstation.notes import workstation_note_tools
+
+            remote = remotes.get(public_tool_name(binding.server, "get_note"))
+            if remote is None:
+                raise ValueError("工作台来源缺少已授权的 get_note 工具")
+            return workstation_note_tools(binding, remote, build_document_application(settings, approve_write=True),
+                                          max_file_bytes=settings.rag.max_file_bytes, secrets=settings.secrets)
+
+        tools.extend(await stack.enter_async_context(external_tools(settings, extension=source_tools)))
         names = [tool.name for tool in tools]
         if len(names) != len(set(names)):
             raise ValueError("本机与外部 MCP 工具名称冲突")

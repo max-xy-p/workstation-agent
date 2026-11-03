@@ -8,7 +8,7 @@ from pydantic import ConfigDict, JsonValue
 from pydantic.dataclasses import dataclass
 
 from ..safety.permissions import ApprovalPolicy, PermissionRequired
-from .contracts import AsyncTool, ToolError, ValidatedTool
+from .contracts import AsyncTool, AsyncValueTool, ToolError, ValidatedTool
 from .execution import GRANT, ToolGrant, check_execution
 from .registry import ToolRegistry
 
@@ -74,7 +74,7 @@ class ToolExecutor:
                 not isinstance(key, str) for key in arguments
             ):
                 raise ToolError("arguments must be a JSON object", code="invalid_arguments")
-            requested = ToolGrant.for_call(name, arguments)
+            requested = ToolGrant.for_call(name, arguments, context=tool.definition.approval_context)
             if isinstance(tool, ValidatedTool):
                 arguments = tool.validate_arguments(arguments)
             if GRANT.get() != requested and not self.approval_policy.allows(
@@ -98,13 +98,7 @@ class ToolExecutor:
         """校验已发现的异步工具后授权，再发出远程请求；审批前不会试调用远端。"""
         name = tool.definition.name
         try:
-            check_execution()
-            requested = ToolGrant.for_call(name, arguments)
-            validated = tool.validate_arguments(arguments)
-            if GRANT.get() != requested and not self.approval_policy.allows(name, tool.permission, validated):
-                raise PermissionRequired("远程工具需要审批")
-            check_execution()
-            content = await tool.ainvoke(validated)
+            content = await self.execute_value(tool, arguments)
             return ToolResult(name, self._bound(content))
         except PermissionRequired:
             raise
@@ -112,3 +106,18 @@ class ToolExecutor:
             return self._failure(name, exc.code, str(exc))
         except Exception:
             return self._failure(name, "execution_failed", "远程工具执行失败")
+
+    async def execute_value[ResultT](self, tool: AsyncValueTool[ResultT], arguments: dict[str, JsonValue]) -> ResultT:
+        """授权后保留原始结果类型；应用处理不走模型输出截断，错误仍不包含底层异常。"""
+        try:
+            check_execution()
+            requested = ToolGrant.for_call(tool.definition.name, arguments, context=tool.definition.approval_context)
+            validated = tool.validate_arguments(arguments)
+            if GRANT.get() != requested and not self.approval_policy.allows(tool.definition.name, tool.permission, validated):
+                raise PermissionRequired("工具需要审批")
+            check_execution()
+            return await tool.ainvoke(validated)
+        except (PermissionRequired, ToolError):
+            raise
+        except Exception:
+            raise ToolError("异步工具执行失败", code="execution_failed") from None

@@ -13,6 +13,7 @@ from .context.config import ContextSettings
 from .memory.config import MemorySettings
 from .rag.config import RagSettings
 from .tools.mcp_config import MCPServerConfig, external_servers_from_env
+from .integrations.workstation.config import WorkstationNotesConfig, workstation_notes_from_env
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,7 @@ class Settings:
     memory: MemorySettings = field(default_factory=MemorySettings)
     context: ContextSettings = field(default_factory=ContextSettings)
     external_mcp_servers: tuple[MCPServerConfig, ...] = ()
+    workstation_notes: WorkstationNotesConfig | None = None
 
     @property
     def secrets(self) -> tuple[str | None, ...]:
@@ -84,6 +86,10 @@ class Settings:
         names = [server.name for server in self.external_mcp_servers]
         if len(names) > 16 or len(names) != len(set(names)):
             raise ValueError("外部 MCP 服务名称必须唯一且最多配置 16 个")
+        if self.workstation_notes is not None:
+            source = next((server for server in self.external_mcp_servers if server.name == self.workstation_notes.server), None)
+            if source is None or source.tools.get("get_note") != "read":
+                raise ValueError("工作台笔记来源需要在对应 MCP 白名单中将 get_note 配置为 read")
         if self.database_url is not None:
             database = urlparse(self.database_url)
             if (database.scheme not in {"postgresql", "postgres"} or not database.hostname
@@ -180,4 +186,5 @@ class Settings:
             memory=MemorySettings.from_env(),
             context=ContextSettings.from_env(),
             external_mcp_servers=external_servers_from_env(),
+            workstation_notes=workstation_notes_from_env(),
         )

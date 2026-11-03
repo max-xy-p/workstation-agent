@@ -12,7 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from ..memory.service import redact
 from ..safety import AllowSafeReadsPolicy, PermissionLevel, PermissionRequired
-from .contracts import ToolDefinition, ToolError
+from .contracts import AsyncTool, ToolDefinition, ToolError
 from .execution import EXECUTION, GRANT
 from .executor import ToolExecutor, ToolResult
 from .registry import ToolRegistry
@@ -67,7 +67,8 @@ class RemoteMCPTool:
     """绑定一个已发现的工具和可信本地权限；不使用远端读写注解自动授权。"""
 
     def __init__(self, client: Client, tool: Tool, name: str, permission: PermissionLevel, *,
-                 internal_service: bool = False, secrets: tuple[str | None, ...] = ()) -> None:
+                 internal_service: bool = False, secrets: tuple[str | None, ...] = (),
+                 approval_context: str | None = None) -> None:
         self.client: Client = client
         self.remote_name = tool.name
         self.permission = permission
@@ -80,7 +81,7 @@ class RemoteMCPTool:
             raise ValueError("MCP 工具 schema 不支持外部引用")
         Draft202012Validator.check_schema(schema)
         self.validator: Draft202012Validator = Draft202012Validator(schema)
-        self.definition = ToolDefinition(name, redact(tool.description or tool.name, secrets), schema)
+        self.definition = ToolDefinition(name, redact(tool.description or tool.name, secrets), schema, approval_context)
 
     def validate_arguments(self, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """在授权前按已发现的 JSON Schema 校验参数，不回显失败值。"""
@@ -90,6 +91,10 @@ class RemoteMCPTool:
 
     async def ainvoke(self, arguments: dict[str, JsonValue]) -> str:
         """调用固定远程名称；内部服务才接收本项目的审批和截止时间元数据。"""
+        return self._content(await self.call_result(arguments))
+
+    async def call_result(self, arguments: dict[str, JsonValue]) -> CallToolResult:
+        """返回官方 MCP 结果供授权包装器处理，不对原始文档执行截断或改写。"""
         meta: RequestParamsMeta = {}
         if self.internal_service:
             grant, control = GRANT.get(), EXECUTION.get()
@@ -97,8 +102,7 @@ class RemoteMCPTool:
                 meta["workstation_approval"] = grant.model_dump(mode="json")
             if control is not None:
                 meta["workstation_deadline"] = control.deadline
-        result = await self.client.call_tool(self.remote_name, arguments, meta=meta or None)
-        return self._content(result)
+        return await self.client.call_tool(self.remote_name, arguments, meta=meta or None)
 
     def _content(self, response: CallToolResult) -> str:
         if self.internal_service:
@@ -125,7 +129,27 @@ class RemoteMCPTool:
         return redact("\n".join(texts), self.secrets)
 
 
-def remote_invocation(tool: RemoteMCPTool, max_output_chars: int) -> Callable[[dict[str, JsonValue]], Awaitable[ToolResult]]:
+class MCPResultTool:
+    """在工具执行器内读取完整 MCP 响应，供来源适配器校验原文，不进入模型工具目录。"""
+
+    def __init__(self, remote: RemoteMCPTool) -> None:
+        self.remote: RemoteMCPTool = remote
+        self.definition = remote.definition
+        self.permission = remote.permission
+
+    def validate_arguments(self, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        """沿用已发现工具的参数 schema，不另建业务参数校验器。"""
+        return self.remote.validate_arguments(arguments)
+
+    async def ainvoke(self, arguments: dict[str, JsonValue]) -> CallToolResult:
+        """只返回成功响应；远端错误不携带原始异常文本。"""
+        response = await self.remote.call_result(arguments)
+        if response.is_error:
+            raise ToolError("读取外部资料失败", code="remote_tool_failed")
+        return response
+
+
+def remote_invocation(tool: AsyncTool, max_output_chars: int) -> Callable[[dict[str, JsonValue]], Awaitable[ToolResult]]:
     """复用统一执行器在远程副作用前审批，供 LangChain 工具和应用调用。"""
     executor = ToolExecutor(ToolRegistry(), AllowSafeReadsPolicy(), max_output_chars=max_output_chars)
 

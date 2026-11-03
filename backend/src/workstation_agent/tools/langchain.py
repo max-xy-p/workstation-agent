@@ -44,7 +44,7 @@ def make_langchain_tool(
         check_execution()
         result = await invoke(arguments)
         if result.error_code == "permission_required":
-            grant = ToolGrant.for_call(definition.name, arguments)
+            grant = ToolGrant.for_call(definition.name, arguments, context=definition.approval_context)
             request = ApprovalRequest(
                 name=definition.name, arguments=arguments, fingerprint=grant.fingerprint
             )

@@ -21,6 +21,8 @@ class ToolDefinition:
     description: str
     # 参数的 JSON Schema，描述类型和必填要求。
     parameters: dict[str, Any]
+    # 将审批绑定到可信来源配置或契约版本，不作为模型可填写的参数。
+    approval_context: str | None = None
 
 
 class ToolError(RuntimeError):
@@ -56,14 +58,18 @@ class ToolRequest(BaseModel):
     arguments: dict[str, Any]
 
 
-class AsyncTool(Protocol):
-    """异步工具提供完整参数校验和调用方法，由 ToolExecutor 在发出请求前授权。"""
+class AsyncValueTool[ResultT](Protocol):
+    """异步工具返回明确类型的原始结果，供工具执行器授权后交给应用处理。"""
 
     @property
     def definition(self) -> ToolDefinition: ...
     permission: PermissionLevel
     def validate_arguments(self, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]: ...
-    async def ainvoke(self, arguments: dict[str, JsonValue]) -> str: ...
+    async def ainvoke(self, arguments: dict[str, JsonValue]) -> ResultT: ...
+
+
+class AsyncTool(AsyncValueTool[str], Protocol):
+    """返回文本的异步工具，执行结果可限制长度后交给模型。"""
 
 
 class ToolArguments(BaseModel):

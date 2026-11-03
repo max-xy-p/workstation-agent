@@ -1848,9 +1848,15 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+workstation = [
+    { name = "workstation-api-client" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pyright" },
+    { name = "workstation-api-client" },
 ]
 
 [package.metadata]
@@ -1872,10 +1878,30 @@ requires-dist = [
     { name = "rank-bm25", specifier = ">=0.2.2,<1" },
     { name = "starlette", specifier = ">=1.7,<2" },
     { name = "uvicorn", specifier = ">=0.54,<1" },
+    { name = "workstation-api-client", marker = "extra == 'workstation'", directory = "../../../workstation/clients/python" },
 ]
+provides-extras = ["workstation"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pyright", specifier = ">=1.1.414" }]
+dev = [
+    { name = "pyright", specifier = ">=1.1.414" },
+    { name = "workstation-api-client", directory = "../../../workstation/clients/python" },
+]
+
+[[package]]
+name = "workstation-api-client"
+version = "5.0.0"
+source = { directory = "../../../workstation/clients/python" }
+dependencies = [
+    { name = "attrs" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "attrs", specifier = ">=22.2.0" },
+    { name = "httpx", specifier = ">=0.23.1,<0.29.0" },
+]
 
 [[package]]
 name = "xxhash"

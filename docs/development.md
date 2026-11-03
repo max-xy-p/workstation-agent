@@ -99,6 +99,22 @@ React 管理交互，Vite 提供开发代理和构建；Zod 校验网络边界�
 不增加服务进程或外部存储。外部 schema 引用不允许触发网络读取。当前只支持文本结果，SDK 专用业务模型在来源适配模块中复用，
 通用 MCP 和 RAG 不依赖具体业务 SDK。
 
+## 工作台 SDK 与笔记适配
+
+`integrations/workstation/` 负责工作台来源绑定、SDK 结果解析和摄取工具，不改变 Agent 执行图或 RAG 管线。
+它直接使用 `workstation-api-client==5.0.0` 的 `NoteDetailResponse`，不复制或继承笔记 DTO，不调用 SDK 的 HTTP 方法。
+SDK 模型由工作台 OpenAPI 生成；原始返回仍需检查身份、版本、正文类型及大小，不能把生成代码的类型注解当成运行时校验。
+
+此 SDK 作为 `workstation` 可选依赖安装，开发组也包含同版 SDK 以运行集成测试。
+本地 `uv` 来源是相对于 `backend/` 的 `../../../workstation/clients/python`，要求两个仓库按当前目录关系检出；
+该目录只读取和构建，不复制生成代码。独立部署时可先从工作台仓库构建 SDK wheel，再与 Agent wheel 一起安装，
+或由组织的包源提供同一版本。SDK/API 版本改变时更新约束和锁文件，并验证 MCP 工具契约。
+SDK 增加一个 Python 包；它的 attrs、HTTP 客户端依赖已有，无需新增数据库或服务。
+
+通用 MCP 层继续使用官方 `CallToolResult`。`ToolExecutor.execute_value` 用泛型保留完整结果类型，
+供来源适配读取；模型侧仍使用有长度限制的文本结果，避免把被截断或脱敏改写的文本当作来源原文。
+笔记字段到通用文档输入的映射属于具体来源规则，官方 MCP 客户端和 RAG 组件不提供这一工作台映射，故只在适配模块实现。
+
 ## 添加能力
 
 先尝试现有框架的配置与组件组合，再用官方扩展接口，最后才补最小业务逻辑。

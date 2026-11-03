@@ -192,6 +192,13 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
             configured = False
         print(f"MCP {server.name}: {server.transport}; allowed tools: {len(server.tools)}; credential configured: {configured}")
         ready = ready and configured
+    if settings.workstation_notes is not None:
+        try:
+            sdk_ready = version("workstation-api-client") == "5.0.0"
+        except Exception:
+            sdk_ready = False
+        print(f"Workstation note ingestion: enabled; SDK 5.0.0 available: {sdk_ready}")
+        ready = ready and sdk_ready
     ready = _doctor_rag(args, settings) and ready
     ready = _doctor_memory(args, settings) and ready
     if args.database:
