@@ -5,10 +5,21 @@ export const conversationSchema = z.object({
   id: z.string(), title: z.string(), revision: z.number().int().nonnegative(),
   created_at: date, updated_at: date,
 });
+export const sourceSchema = z.object({
+  id: z.string().regex(/^src_[a-f0-9]{24}$/), document_id: z.string(), checksum: z.string(),
+  source_uri: z.string(), title: z.string(), content: z.string(), citation: z.string(),
+  line_start: z.number().int().positive(), line_end: z.number().int().positive(),
+  source_version: z.string().nullable(),
+  original_url: z.url().refine((value) => {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  }).nullable(),
+});
 export const messageSchema = z.object({
   id: z.string(), session_id: z.string(), position: z.number().int(),
   role: z.enum(['user', 'assistant']), content: z.string(), run_id: z.string().nullable(),
   created_at: date, updated_at: date,
+  sources: z.array(sourceSchema).max(32),
 });
 export const stepSchema = z.object({
   id: z.string(), name: z.string(), kind: z.enum(['model', 'tool', 'memory', 'retrieval']),
@@ -39,6 +50,7 @@ export function pageSchema<T extends z.ZodType>(item: T) {
 
 export type Conversation = z.infer<typeof conversationSchema>;
 export type Message = z.infer<typeof messageSchema>;
+export type AnswerSource = z.infer<typeof sourceSchema>;
 export type Run = z.infer<typeof runSchema>;
 export type Step = z.infer<typeof stepSchema>;
 export type Approvals = z.infer<typeof approvalsSchema>;

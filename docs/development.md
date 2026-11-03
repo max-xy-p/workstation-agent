@@ -102,7 +102,7 @@ React 管理交互，Vite 提供开发代理和构建；Zod 校验网络边界�
 ## 工作台 SDK 与笔记适配
 
 `integrations/workstation/` 负责工作台来源绑定、SDK 结果解析和摄取工具，不改变 Agent 执行图或 RAG 管线。
-它直接使用 `workstation-api-client==5.0.0` 的 `NoteDetailResponse`，不复制或继承笔记 DTO，不调用 SDK 的 HTTP 方法。
+它直接使用 `workstation-api-client==5.1.0` 的 `NoteDetailResponse`，不复制或继承笔记 DTO，不调用 SDK 的 HTTP 方法。
 SDK 模型由工作台 OpenAPI 生成；原始返回仍需检查身份、版本、正文类型及大小，不能把生成代码的类型注解当成运行时校验。
 
 此 SDK 作为 `workstation` 可选依赖安装，开发组也包含同版 SDK 以运行集成测试。
@@ -114,6 +114,14 @@ SDK 增加一个 Python 包；它的 attrs、HTTP 客户端依赖已有，无需
 通用 MCP 层继续使用官方 `CallToolResult`。`ToolExecutor.execute_value` 用泛型保留完整结果类型，
 供来源适配读取；模型侧仍使用有长度限制的文本结果，避免把被截断或脱敏改写的文本当作来源原文。
 笔记字段到通用文档输入的映射属于具体来源规则，官方 MCP 客户端和 RAG 组件不提供这一工作台映射，故只在适配模块实现。
+
+## 回答引用的扩展边界
+
+回答引用复用官方 `ToolMessage` 消息和 [react-markdown 的 components 扩展](https://github.com/remarkjs/react-markdown#appendix-b-components)。
+`application/sources.py` 只从成功的检索工具结果构造领域来源对象，`domain/sources.py` 定义持久化的原文片段。
+框架消息和 Markdown 渲染器不管理本项目消息历史、来源版本或工作台路由，因此在现有应用与存储层补充这些规则，
+不添加解析框架或新服务。维护时需检查片段去重、审批恢复、凭据过滤、旧回答不随索引更新以及来源链接的范围约束。
+可点击引用仅由 RAG 回答检索启用，并按带链接的最终文本计算预算；普通 Context 检索使用紧凑引用，避免额外链接挤占证据空间。
 
 ## 添加能力
 

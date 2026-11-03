@@ -41,6 +41,7 @@ from ..tools.langchain import ToolService
 from ..tools.contracts import ToolError
 from ..storage.base import RunRepository
 from .runs import RunPersistenceError
+from .sources import collect_sources
 
 
 class _ExecutionInput(InputAgentState):
@@ -78,10 +79,14 @@ class AgentApplication:
         extraction: ToolService | None = None,
         run_timeout: float = 300.0,
         history: ConversationHistory | None = None,
+        source_links: Callable[[str], str | None] | None = None,
+        secrets: tuple[str | None, ...] = (),
     ) -> None:
         if not math.isfinite(run_timeout) or run_timeout <= 0:
             raise ValueError("整次任务超时必须为正数")
         self.run_timeout = run_timeout
+        self.source_links: Callable[[str], str | None] | None = source_links
+        self.secrets: tuple[str | None, ...] = secrets
         self._active: dict[str, tuple[ExecutionControl, asyncio.Task[Run]]] = {}
         self.graph = graph
         self.context = context or ContextBuilder()
@@ -381,6 +386,7 @@ class AgentApplication:
                 run.created_at = previous.created_at
                 run.node = previous.node
                 run.task_status = deepcopy(previous.task_status)
+                run.sources = deepcopy(previous.sources)
         runtime.run_id = run.id
         control: RunControlState = saved or {
             "schema_version": 1,
@@ -451,7 +457,7 @@ class AgentApplication:
                 on_node(node)
             return None
         run.task_status = deepcopy(runtime.board)
-        latest = self._record_messages(node, values, run)
+        latest = self._record_messages(node, values, run, source_links=self.source_links, secrets=self.secrets)
         if node == "model":
             run.transition(RunStatus.ACTING if latest is not None and latest.tool_calls else RunStatus.THINKING)
         elif node == "tools":
@@ -466,7 +472,11 @@ class AgentApplication:
         return latest
 
     @staticmethod
-    def _record_messages(node: str, values: dict[str, Any], run: Run) -> AIMessage | None:
+    def _record_messages(
+        node: str, values: dict[str, Any], run: Run, *,
+        source_links: Callable[[str], str | None] | None = None,
+        secrets: tuple[str | None, ...] = (),
+    ) -> AIMessage | None:
         """框架流更新允许开放字段，在接入边界校验消息后再记录业务步骤。"""
         messages = TypeAdapter(list[AnyMessage | RemoveMessage]).validate_python(
             values.get("messages", [])
@@ -479,6 +489,7 @@ class AgentApplication:
                 run.steps.append(step)
                 latest = message
             elif isinstance(message, ToolMessage) and node == "tools":
+                run.sources = collect_sources(message, run.sources, resolve_url=source_links, secrets=secrets)
                 step = Step(run_id=run.id, kind=StepKind.TOOL, name=message.name or "tool")
                 if message.status == "error":
                     step.fail("工具调用失败")

@@ -8,7 +8,7 @@ from workstation_client.models.note_detail_response import NoteDetailResponse
 
 def note_payload(*, content: str = "# 数据库\r\n工作台原文使用 PostgreSQL。", version: int = 7,
                  note_id: int = 42, title: str = "工作台资料") -> dict[str, JsonValue]:
-    """返回 SDK 5.0.0 序列化的响应，转换只发生在外部 JSON 边界。"""
+    """返回 SDK 5.1.0 序列化的响应，转换只发生在外部 JSON 边界。"""
     note = NoteDetailResponse(id=note_id, title=title, content=content, version=version,
                               folder_id=None, folder_name=None, project_id=3, project_name="项目",
                               tags=[], created_at=datetime.now(UTC), updated_at=datetime.now(UTC))

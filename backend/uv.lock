@@ -1890,7 +1890,7 @@ dev = [
 
 [[package]]
 name = "workstation-api-client"
-version = "5.0.0"
+version = "5.1.0"
 source = { directory = "../../../workstation/clients/python" }
 dependencies = [
     { name = "attrs" },

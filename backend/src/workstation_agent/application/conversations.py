@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 from ..api.conversations import CreateSession, Page, PageRequest, RenameSession, SessionId, WriteMessage
 from ..context.state import RunControlState
 from ..domain.conversations import Conversation, ConversationMessage
+from ..domain.sources import AnswerSource
 from ..domain.runs import Run, RunStatus, new_id
 from ..memory.service import redact
 from ..safety.permissions import ApprovalPolicy, PermissionLevel
@@ -31,6 +32,7 @@ class ConversationRepository(Protocol):
     def append(
         self, session_id: str, message_id: str, role: Literal["user", "assistant"], content: str,
         run_id: str | None, revision: int | None = None,
+        *, sources: list[AnswerSource] | None = None,
     ) -> ConversationMessage: ...
     def edit(self, session_id: str, message: ConversationMessage, content: str, revision: int) -> ConversationMessage: ...
     def truncate(self, session_id: str, position: int, revision: int) -> None: ...
@@ -180,4 +182,5 @@ class ConversationApplication:
         if run.status == RunStatus.COMPLETED and run.answer is not None:
             self._write(lambda: self.repository.append(
                 run.session_id, run.id + "_assistant", "assistant", redact(run.answer or "", self.secrets), run.id,
+                sources=run.sources,
             ))

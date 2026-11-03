@@ -194,10 +194,11 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
         ready = ready and configured
     if settings.workstation_notes is not None:
         try:
-            sdk_ready = version("workstation-api-client") == "5.0.0"
+            sdk_ready = version("workstation-api-client") == "5.1.0"
         except Exception:
             sdk_ready = False
-        print(f"Workstation note ingestion: enabled; SDK 5.0.0 available: {sdk_ready}")
+        print(f"Workstation note ingestion: enabled; SDK 5.1.0 available: {sdk_ready}")
+        print(f"Workstation source links configured: {settings.workstation_notes.web_url is not None}")
         ready = ready and sdk_ready
     ready = _doctor_rag(args, settings) and ready
     ready = _doctor_memory(args, settings) and ready

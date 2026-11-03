@@ -92,7 +92,9 @@ Invoke-RestMethod "$base/runs/$($run.id)" -Headers $headers
 | `DELETE /sessions/{id}/messages/{message_id}?revision=2` | 删除该消息及后续消息；返回 ID 和 `following_messages_deleted:true` |
 
 标题为 1–200 字符，文本为 1–32000 字符，均不能只含空白。写入不接受角色字段，助手答复只能由 Agent 保存。
-消息包含 `id`、`session_id`、`position`、`role`、`content`、`run_id` 和创建/更新时间。
+消息包含 `id`、`session_id`、`position`、`role`、`content`、`run_id`、`sources` 和创建/更新时间。
+`sources` 保存本次检索的原文片段、行号、版本和可选工作台链接；用户消息及旧消息为空数组。
+它不接受客户端通过消息写入接口填写，使用方式见 [回答来源](rag.md#回答来源与原笔记链接)。
 `position` 只保证排序，删除后不重编号；单独新增的文本没有运行 ID。
 列表不包含工具原文、模型内部消息或上下文摘要。
 

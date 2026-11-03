@@ -64,7 +64,7 @@ class WorkstationNoteSource:
         try:
             note = NoteDetailResponse.from_dict(payload)
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
-            raise ToolError("笔记结果不符合工作台 SDK 5.0.0 契约", code="invalid_note") from None
+            raise ToolError("笔记结果不符合工作台 SDK 5.1.0 契约", code="invalid_note") from None
         if (type(note.id) is not int or note.id != note_id or type(note.version) is not int or note.version < 1
                 or not isinstance(note.title, str) or not note.title.strip() or len(note.title) > 200
                 or not isinstance(note.content, str) or not note.content or "\0" in note.content

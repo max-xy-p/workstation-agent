@@ -1,9 +1,9 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowDown, ArrowUp, Check, ChevronUp, Copy, FileText, FolderSearch, LoaderCircle, MessageSquare, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react';
 import type { Message, Run } from '../api/contracts';
 import { isActive } from '../api/contracts';
 
-const MarkdownBody = lazy(() => import('./MarkdownBody'));
+import { AnswerMessage } from './AnswerMessage';
 
 export function Brand({ small = false }: { small?: boolean }) {
   return <span className={`brand-mark ${small ? 'small' : ''}`} aria-hidden="true"><span /><span /><span /></span>;
@@ -78,7 +78,7 @@ export function ConversationView({ sessionId, messages, run, locked, loading, bu
         {messages.slice(-visibleCount).map((message) => <article key={message.id} className={`message ${message.role}`}>
           <div className="message-avatar">{message.role === 'assistant' ? <Brand small /> : <span>你</span>}</div>
           <div className="message-body"><div className="message-heading"><strong>{message.role === 'assistant' ? 'Workstation' : '你'}</strong><time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div>
-            {message.role === 'assistant' ? <Suspense fallback={<div className="user-content">{message.content}</div>}><MarkdownBody content={message.content} /></Suspense> : <div className="user-content">{message.content}</div>}
+            {message.role === 'assistant' ? <AnswerMessage message={message} /> : <div className="user-content">{message.content}</div>}
             <div className="message-actions"><button className="icon-button" title="复制消息" aria-label="复制消息" onClick={() => { void copy(message); }}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
               {message.role === 'user' && <button className="icon-button" title="编辑消息" aria-label="编辑消息" disabled={locked || busy || !connected} onClick={() => onEdit(message)}><Pencil size={14} /></button>}
               <button className="icon-button" title="删除此条及后续消息" aria-label="删除消息" disabled={locked || busy || !connected} onClick={() => onDelete(message)}><Trash2 size={14} /></button>

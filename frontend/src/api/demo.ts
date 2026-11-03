@@ -35,7 +35,17 @@ export class DemoGateway implements AgentGateway {
 
 \`会话\` 保存持续的对话；\`运行\` 对应一次任务执行。一个会话可以包含多次运行。
 
-下一步可以先打通新建会话、提交问题与查看结果，再接入历史修改和审批恢复。`, 'demo_design');
+下一步可以先打通新建会话、提交问题与查看结果，再接入历史修改和审批恢复。
+
+相关约定见 [前端开发指南](#source-src_1234567890abcdef12345678)。`, 'demo_design');
+    const demoAnswer = this.history.at(-1);
+    if (demoAnswer) demoAnswer.sources = [{
+      id: 'src_1234567890abcdef12345678', document_id: 'demo_document', checksum: 'a'.repeat(64),
+      source_uri: 'workstation://demo/workspaces/11/notes/42', title: '前端开发指南',
+      line_start: 12, line_end: 14, source_version: '7',
+      content: '前端单独放在 frontend/，通过 HTTP 接口访问应用用例。\n会话保存持续的对话，运行对应一次任务执行。',
+      citation: '演示笔记:12-14', original_url: 'https://workstation.example.com/w/11/notes/42/edit',
+    }];
     this.records.push({
       id: 'demo_design', session_id: first.id, status: 'completed', node: 'model',
       answer: '演示答复', error: null, updated_at: now(),
@@ -83,7 +93,7 @@ export class DemoGateway implements AgentGateway {
   private touch(chat: Conversation): void { chat.revision++; chat.updated_at = now(); }
   private push(sessionId: string, role: Message['role'], content: string, runId: string | null): Message {
     const message: Message = { id: id('message'), session_id: sessionId, position: ++this.position,
-      role, content, run_id: runId, created_at: now(), updated_at: now() };
+      role, content, run_id: runId, created_at: now(), updated_at: now(), sources: [] };
     this.history.push(message);
     this.touch(this.find(sessionId));
     return message;

@@ -295,7 +295,12 @@ class RagApplication:
             for hit in hits
         ]
         expanded = self._expand(selected, chunks)
-        evidence, context, omitted = assemble_evidence(expanded, self.settings.context_budget)
+        # 版本取自来源快照，兼容已保存的分块，不要求为了展示版本重建索引。
+        versions = {item.source.id: item.source.metadata.get("source_version") for item in snapshots}
+        expanded = [chunk.model_copy(update={"metadata": {
+            **chunk.metadata, "source_version": versions[chunk.metadata["document_id"]],
+        }}) for chunk in expanded]
+        evidence, context, omitted = assemble_evidence(expanded, self.settings.context_budget, link_sources=True)
         return self._search_result(evidence, expanded, context, omitted)
 
     def _matching_snapshots(

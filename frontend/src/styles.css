@@ -113,6 +113,29 @@ svg { vertical-align: middle; flex-shrink: 0; stroke-width: 1.65; }
 .markdown th:first-child { border-radius: 5px 0 0 0; }
 .markdown th:last-child { border-radius: 0 5px 0 0; }
 .markdown blockquote { margin: 15px 0; padding: 2px 15px; border-left: 3px solid #bccce9; color: #697a94; }
+.citation-link { display: inline; padding: 1px 6px; border-radius: 5px; color: var(--accent); background: var(--blue-wash); font-size: .86em; text-align: left; overflow-wrap: anywhere; }
+.unverified-citation { color: var(--muted); }
+.answer-sources { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sources-heading { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+.sources-heading small { margin-left: auto; }
+.source-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.source-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 6px 10px 6px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; text-align: left; }
+.source-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-chip:hover, .source-chip.selected { border-color: #a9bcdf; background: #f5f8fe; color: var(--accent); }
+.source-number { display: grid; place-items: center; width: 20px; height: 20px; flex-shrink: 0; border-radius: 4px; background: var(--blue-wash); color: var(--accent); font-size: 10px; }
+.source-detail { margin-top: 12px; border: 1px solid #d9e2ef; border-radius: 8px; padding: 14px 16px; background: #fafbfd; }
+.source-detail-heading, .source-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.source-detail-heading strong { font-size: 13px; overflow-wrap: anywhere; }
+.source-detail-heading button { flex-shrink: 0; }
+.source-location, .source-saved-note, .source-uri { font-size: 11px; color: var(--muted); line-height: 1.7; }
+.source-location { margin: 2px 0 12px; }
+.source-excerpt { margin: 0; border-left: 2px solid #b6c6e2; padding: 2px 0 2px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.9; max-height: 320px; overflow-y: auto; }
+.source-footer { flex-wrap: wrap; margin-top: 14px; }
+.source-footer code { font-size: 10px; color: var(--muted); }
+.source-footer a { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 12px; text-decoration: none; }
+.source-footer a:hover { text-decoration: underline; }
+.source-uri { overflow-wrap: anywhere; margin-bottom: 0; }
+.source-saved-note { margin: 8px 0 0; }
 .message-actions { display: flex; gap: 3px; margin: 8px 0 0 -5px; opacity: 0; }
 .message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; }
 .message-actions .icon-button { width: 25px; height: 25px; }

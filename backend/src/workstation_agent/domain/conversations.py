@@ -1,8 +1,10 @@
-"""定义供用户管理的会话与文本历史，不包含框架检查点或工具原文。"""
+"""定义会话、文本历史及答复引用，不保存框架检查点或完整工具记录。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
+
+from .sources import AnswerSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,3 +30,4 @@ class ConversationMessage:
     run_id: str | None
     created_at: datetime
     updated_at: datetime
+    sources: list[AnswerSource] = field(default_factory=list)

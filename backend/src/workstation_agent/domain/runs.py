@@ -8,6 +8,7 @@ from enum import StrEnum
 from uuid import uuid4
 
 from .task_status import TaskBoard
+from .sources import AnswerSource
 
 
 def new_id(prefix: str) -> str:
@@ -122,6 +123,9 @@ class Run:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # 最近一次状态转换时间，使用 UTC。
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    # 实际检索得到的引用片段，审批暂停后仍随同一次运行保留。
+    sources: list[AnswerSource] = field(default_factory=list)
 
     def transition(self, status: RunStatus) -> None:
         """更新任务状态，已结束的任务禁止再次转换。"""

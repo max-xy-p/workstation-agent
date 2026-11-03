@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 
 from ...api.conversations import Page, PageRequest
 from ...domain.conversations import Conversation, ConversationMessage
+from ...domain.sources import AnswerSource
 from ...tools.contracts import ToolError
 from .database import PostgresDatabase
 
@@ -101,12 +102,12 @@ class PostgresConversationRepository:
 
     def _messages(self, connection: Connection, session_id: str) -> list[ConversationMessage]:
         rows = connection.execute(
-            "SELECT id,session_id,position,role,content,run_id,created_at,updated_at "
+            "SELECT id,session_id,position,role,content,run_id,created_at,updated_at,sources "
             "FROM workstation.conversation_messages WHERE scope=%s AND session_id=%s ORDER BY position",
             (self.scope, session_id),
         ).fetchall()
         return [_MESSAGE.validate_python(dict(zip(
-            ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at"),
+            ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at", "sources"),
             row, strict=True,
         ))) for row in rows]
 
@@ -125,12 +126,12 @@ class PostgresConversationRepository:
                 raise ToolError("会话不存在", code="not_found")
             self._session(connection, session_id)
             rows = connection.execute(
-                "SELECT id,session_id,position,role,content,run_id,created_at,updated_at "
+                "SELECT id,session_id,position,role,content,run_id,created_at,updated_at,sources "
                 "FROM workstation.conversation_messages WHERE scope=%s AND session_id=%s "
                 "ORDER BY position LIMIT %s OFFSET %s", (self.scope, session_id, page.limit + 1, page.offset),
             ).fetchall()
             items = [_MESSAGE.validate_python(dict(zip(
-                ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at"),
+                ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at", "sources"),
                 row, strict=True,
             ))) for row in rows[:page.limit]]
             return Page(items=items, next_offset=page.offset + page.limit if len(rows) > page.limit else None)
@@ -144,29 +145,31 @@ class PostgresConversationRepository:
 
     def _message(self, connection: Connection, session_id: str, message_id: str) -> ConversationMessage:
         row = connection.execute(
-            "SELECT id,session_id,position,role,content,run_id,created_at,updated_at "
+            "SELECT id,session_id,position,role,content,run_id,created_at,updated_at,sources "
             "FROM workstation.conversation_messages WHERE scope=%s AND session_id=%s AND id=%s",
             (self.scope, session_id, message_id),
         ).fetchone()
         if row is None:
             raise ToolError("消息不存在", code="not_found")
         return _MESSAGE.validate_python(dict(zip(
-            ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at"),
+            ("id", "session_id", "position", "role", "content", "run_id", "created_at", "updated_at", "sources"),
             row, strict=True,
         )))
 
     def append(
         self, session_id: str, message_id: str, role: Literal["user", "assistant"], content: str,
         run_id: str | None, revision: int | None = None,
+        *, sources: list[AnswerSource] | None = None,
     ) -> ConversationMessage:
         """在会话行锁内追加文本，同一运行的重复回调不会重复保存。"""
         with self.database.transaction(write=True) as connection:
             assert connection is not None
             self._check(connection, session_id, revision)
             inserted = connection.execute(
-                "INSERT INTO workstation.conversation_messages(scope,session_id,id,role,content,run_id) "
-                "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING id",
-                (self.scope, session_id, message_id, role, content, run_id),
+                "INSERT INTO workstation.conversation_messages(scope,session_id,id,role,content,run_id,sources) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb) ON CONFLICT DO NOTHING RETURNING id",
+                (self.scope, session_id, message_id, role, content, run_id,
+                 TypeAdapter(list[AnswerSource]).dump_json(sources or []).decode()),
             ).fetchone()
             if inserted:
                 self._touch(connection, session_id)

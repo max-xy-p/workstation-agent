@@ -35,7 +35,7 @@ test('真实 HTTP 客户端使用读取版本，冲突后不盲目覆盖，令�
   const date = new Date().toISOString();
   const chat: Conversation = { id: 'session_contract', title: '接口会话', revision: 4, created_at: date, updated_at: date };
   const message: Message = { id: 'message_one', session_id: chat.id, role: 'user', content: '保留的原文',
-    position: 1, run_id: null, created_at: date, updated_at: date };
+    position: 1, run_id: null, created_at: date, updated_at: date, sources: [] };
   const writes: { revision: number; content: string }[] = [];
   const token = 'test_frontend_only_' + 'a'.repeat(32);
   await page.route('**/api/**', async (route) => {

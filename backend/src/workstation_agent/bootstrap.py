@@ -447,6 +447,8 @@ async def build_agent_application(
             extraction=extraction,
             run_timeout=settings.run_timeout,
             history=build_conversation_application(settings) if checkpointer is not None else None,
+            source_links=settings.workstation_notes.note_url if settings.workstation_notes else None,
+            secrets=settings.secrets,
         )
 
     async with AsyncExitStack() as stack:

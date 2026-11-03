@@ -28,7 +28,7 @@ dependencies = [
 workstation-agent = "workstation_agent.cli:main"
 
 [project.optional-dependencies]
-workstation = ["workstation-api-client==5.0.0"]
+workstation = ["workstation-api-client==5.1.0"]
 
 [tool.uv.sources]
 workstation-api-client = { path = "../../../workstation/clients/python" }
@@ -55,7 +55,7 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pyright>=1.1.414",
-    "workstation-api-client==5.0.0",
+    "workstation-api-client==5.1.0",
 ]
 
 [tool.pyright]
@@ -65,6 +65,10 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/application/sources.py",
+    "src/workstation_agent/domain/sources.py",
+    "tests/unit/test_answer_sources.py",
+    "tests/integration/test_answer_sources.py",
     "src/workstation_agent/integrations",
     "tests/workstation_support.py",
     "tests/integration/test_workstation_notes.py",
