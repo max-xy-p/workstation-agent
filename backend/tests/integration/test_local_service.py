@@ -109,7 +109,7 @@ class LocalServiceIntegrationTests(unittest.TestCase):
                     self.assertEqual({t.name for t in catalog.tools}, {
                         "list_files", "read_text_file", "ingest_document", "search_documents",
                         "delete_document", "rag_status", "remember_memory", "update_memory",
-                        "delete_memory", "get_memory", "list_memories", "search_memory",
+                        "delete_memory", "get_memory", "list_memories", "search_memory", "save_memory_batch",
                     })
                     listing = await client.call_tool("list_files", {})
                     self.assertEqual(

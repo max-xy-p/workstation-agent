@@ -68,7 +68,8 @@ class PostgresDatabase:
             connection.execute("CREATE SCHEMA IF NOT EXISTS workstation")
             connection.execute("CREATE TABLE IF NOT EXISTS workstation.migrations(version INTEGER PRIMARY KEY)")
             for version, filename in ((5, "005_postgresql.sql"), (6, "006_conversations.sql"),
-                                      (7, "007_run_history.sql"), (8, "008_answer_sources.sql")):
+                                      (7, "007_run_history.sql"), (8, "008_answer_sources.sql"),
+                                      (9, "009_rag_revisions.sql")):
                 if connection.execute(
                     "SELECT 1 FROM workstation.migrations WHERE version=%s", (version,)
                 ).fetchone():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -34,6 +35,26 @@ def redact(text: str, secrets: tuple[str | None, ...] = ()) -> str:
         if secret:
             text = text.replace(secret, "[已脱敏]")
     return _SECRET.sub("[已脱敏]", text)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryChange:
+    """已整理的单条新增或修改，更新目标须带读取时的版本。"""
+
+    content: str
+    kind: Literal["preference", "decision", "experience"]
+    target_id: str | None
+    expected_version: int | None
+    expiry: datetime | Literal["keep"] | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryWritePlan:
+    """保存待提交的记录及准备时观察到的版本，不执行写入。"""
+
+    records: tuple[MemoryRecord, ...]
+    expected: dict[str, int | None]
+    generation: int
 
 
 class MemoryService:
@@ -152,6 +173,45 @@ class MemoryService:
         )
         self.save(access, record, expected_version=version)
         return record
+
+    def prepare_batch(
+        self, access: MemoryAccess, scope: MemoryScope, changes: tuple[MemoryChange, ...],
+        source: MemorySource,
+    ) -> MemoryWritePlan:
+        """整理明确候选的新增和更新，保留审批及提交需要检查的版本。"""
+        if not access.allows(scope):
+            raise ToolError("记忆范围不允许", code="scope_denied")
+        generation = self.repository.generation(scope)
+        current = self.records(access, include_expired=True)
+        owned = {record.id: record for record in current if record.scope == scope}
+        now = datetime.now(UTC)
+        exact = {(record.kind, record.content): record for record in owned.values()
+                 if record.expires_at is None or record.expires_at > now}
+        records: list[MemoryRecord] = []
+        expected: dict[str, int | None] = {}
+        seen: set[tuple[str, str]] = set()
+        for change in changes:
+            content = validate_content(change.content, self.secrets)
+            old = owned.get(change.target_id) if change.target_id else exact.get((change.kind, content))
+            if change.target_id and (old is None or old.version != change.expected_version):
+                raise ToolError("记忆目标或版本已变化，请重新读取", code="version_conflict")
+            kind = old.kind if old else change.kind
+            key = (kind, content)
+            duplicate = exact.get(key)
+            if key in seen or (old and old.id in expected) or (old and duplicate and old.id != duplicate.id):
+                raise ToolError("候选重复或与已有记忆冲突，请明确保留哪一条", code="memory_conflict")
+            seen.add(key)
+            expiry = (old.expires_at if old else None) if change.expiry == "keep" else change.expiry
+            if old:
+                record = old.model_copy(update={
+                    "content": content, "expires_at": expiry, "version": old.version + 1,
+                    "updated_at": now, "sources": tuple(dict.fromkeys((*old.sources, source))),
+                })
+            else:
+                record = MemoryRecord(content=content, kind=kind, scope=scope, sources=(source,), expires_at=expiry)
+            records.append(record)
+            expected[record.id] = old.version if old else None
+        return MemoryWritePlan(tuple(records), expected, generation)
 
     def save(
         self,

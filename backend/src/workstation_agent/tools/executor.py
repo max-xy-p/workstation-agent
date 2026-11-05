@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import ConfigDict, JsonValue
+from pydantic import ConfigDict, Field, JsonValue
 from pydantic.dataclasses import dataclass
 
-from ..safety.permissions import ApprovalPolicy, PermissionRequired
-from .contracts import AsyncTool, AsyncValueTool, ToolError, ValidatedTool
+from ..safety.permissions import ApprovalPolicy, PermissionLevel, PermissionRequired
+from .approval import ApprovalRequest, PlannedApprovalRequired
+from .contracts import AsyncTool, AsyncValueTool, PreparingTool, ToolError, ValidatedTool
 from .execution import GRANT, ToolGrant, check_execution
 from .registry import ToolRegistry
 
@@ -27,6 +28,7 @@ class ToolResult:
     error: str | None = None
     # 供程序判断的错误类别，成功时为 None。
     error_code: str | None = None
+    approval: ApprovalRequest | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ToolExecutor:
@@ -77,12 +79,28 @@ class ToolExecutor:
             requested = ToolGrant.for_call(name, arguments, context=tool.definition.approval_context)
             if isinstance(tool, ValidatedTool):
                 arguments = tool.validate_arguments(arguments)
+            prepared = None
+            if isinstance(tool, PreparingTool):
+                if not self.approval_policy.allows(name, PermissionLevel.SAFE_READ, arguments):
+                    raise ToolError("未授权读取计划所需资料", code="permission_denied")
+                prepared = tool.prepare_call(arguments)
+                requested = ToolGrant.for_call(name, arguments, context=prepared.fingerprint)
+                grant = GRANT.get()
+                if grant is not None and grant.name == name and grant != requested:
+                    raise ToolError("操作计划已变化，请重新准备", code="plan_changed")
+                if prepared.unchanged:
+                    check_execution()
+                    return ToolResult(name, self._bound(prepared.commit()))
             if GRANT.get() != requested and not self.approval_policy.allows(
                 name, tool.permission, arguments
             ):
+                if prepared is not None:
+                    raise PlannedApprovalRequired(ApprovalRequest(
+                        name=name, arguments=prepared.summary, fingerprint=requested.fingerprint,
+                    ))
                 raise PermissionRequired(f"approval required for tool: {name}")
             check_execution()
-            content = tool.invoke(arguments)
+            content = prepared.commit() if prepared is not None else tool.invoke(arguments)
             if not isinstance(content, str):
                 return self._failure(name, "invalid_output", "tool must return text")
         except PermissionRequired:
@@ -100,6 +118,9 @@ class ToolExecutor:
         try:
             content = await self.execute_value(tool, arguments)
             return ToolResult(name, self._bound(content))
+        except PlannedApprovalRequired as exc:
+            return ToolResult(name, "操作计划需要审批", False, "操作计划需要审批",
+                              "permission_required", exc.request)
         except PermissionRequired:
             raise
         except ToolError as exc:

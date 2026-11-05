@@ -1,15 +1,16 @@
 """声明 RAG 工具权限，所有文档与模型副作用均发生在授权后。"""
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, JsonValue, field_validator
 
 from ...application.rag import RagApplication
 from ...api.documents import IngestDocument
 from ...safety.permissions import PermissionLevel
-from ..contracts import PydanticTool, ToolArguments, ToolError
+from ..contracts import PreparedCall, PydanticTool, ToolArguments, ToolError
 from ..executor import ToolExecutor
 from .workspace import WorkspacePathArguments, resolve_inside
 
@@ -102,11 +103,16 @@ class IngestDocumentTool(PydanticTool[IngestArguments]):
     permission = PermissionLevel.CONTROLLED_WRITE
     arguments_model = IngestArguments
 
-    def __init__(self, workspace: Path, application: RagApplication) -> None:
+    def __init__(self, workspace: Path, application: RagApplication, *, secrets: tuple[str | None, ...] = ()) -> None:
         self.workspace = workspace.resolve()
         self.application = application
+        self.secrets = secrets
 
-    def run(self, arguments: IngestArguments) -> str:
+    def prepare_call(self, arguments: dict[str, JsonValue]) -> PreparedCall:
+        """预读有界原文并固定内容，审批只展示来源与版本摘要。"""
+        return self._prepare(self._parse(arguments))
+
+    def _prepare(self, arguments: IngestArguments) -> PreparedCall:
         path = resolve_inside(self.workspace, arguments.path)
         if path.suffix.lower() not in {".md", ".txt"}:
             raise ToolError("only .md and .txt are supported", code="unsupported_format")
@@ -124,9 +130,21 @@ class IngestDocumentTool(PydanticTool[IngestArguments]):
         if "\0" in text:
             raise ToolError("binary text is not supported", code="unsupported_format")
         source = path.relative_to(self.workspace).as_posix()
-        return json.dumps(
-            self.application.ingest(source, text, arguments.metadata), ensure_ascii=False
+        values = (source, text, *arguments.metadata.keys(), *arguments.metadata.values())
+        if any(secret and secret in value for secret in self.secrets for value in values):
+            raise ToolError("文档包含已知凭据，拒绝摄取", code="sensitive_content")
+        plan = self.application.plan_ingestion(source, text, arguments.metadata)
+        return PreparedCall(
+            {"path": source, "action": plan.action, "checksum": plan.document.checksum,
+             "index_revision": plan.revision, "bytes": len(raw)},
+            sha256(f"{self.workspace}:{plan.fingerprint}".encode()).hexdigest(),
+            lambda: json.dumps(self.application.commit_ingestion(plan), ensure_ascii=False),
+            unchanged=plan.action == "unchanged",
         )
+
+    def run(self, arguments: IngestArguments) -> str:
+        """执行已获授权的摄取；执行器使用准备阶段返回的同一份计划。"""
+        return self._prepare(arguments).commit()
 
 
 class IngestExternalDocumentTool(PydanticTool[IngestDocument]):

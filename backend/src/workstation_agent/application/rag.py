@@ -1,5 +1,7 @@
 """编排框架文档、索引快照与证据；副作用由工具执行边界授权。"""
 
+import json
+from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Literal, NotRequired, TypedDict
 
@@ -29,6 +31,7 @@ from ..rag.repository import IndexRepository
 from ..rag.retriever import KnowledgeRetrievalStrategy
 from ..retrieval.strategy import RetrievalStrategy, validate_hits
 from ..tools.contracts import ToolError
+from ..tools.execution import check_execution
 
 _CHUNK_BUDGET_ERROR = "RAG chunk budget exceeded"
 
@@ -41,6 +44,28 @@ class IngestResult(TypedDict):
     chunks: int
     checksum: NotRequired[str]
     mode: NotRequired[str]
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionPlan:
+    """固定待发布原文、处理配置和索引版本，原文仅在执行期间持有。"""
+
+    document: SourceDocument
+    text: str = field(repr=False)
+    revision: int
+    pipeline: str
+    action: Literal["create", "update", "unchanged"]
+    previous_chunks: int
+
+    @property
+    def fingerprint(self) -> str:
+        """绑定来源、内容校验值、处理配置及目标索引版本。"""
+        doc = self.document
+        payload = json.dumps(
+            [doc.source_uri, doc.title, doc.checksum, doc.media_type, doc.metadata, self.pipeline, self.revision],
+            sort_keys=True, ensure_ascii=False,
+        )
+        return sha256(payload.encode()).hexdigest()
 
 
 class IndexStatus(TypedDict):
@@ -108,6 +133,13 @@ class RagApplication:
     def ingest(self, source: str, text: str, metadata: dict[str, str], *, title: str | None = None,
                media_type: Literal["text/markdown", "text/plain"] | None = None) -> IngestResult:
         """处理已授权读取的文本；发布失败时保留已有版本。"""
+        return self.commit_ingestion(self.plan_ingestion(source, text, metadata, title=title, media_type=media_type))
+
+    def plan_ingestion(
+        self, source: str, text: str, metadata: dict[str, str], *, title: str | None = None,
+        media_type: Literal["text/markdown", "text/plain"] | None = None,
+    ) -> IngestionPlan:
+        """比较原文及目标索引版本，准备阶段不分块、不调用模型、不写索引。"""
         if len(text.encode("utf-8")) > self.settings.max_file_bytes:
             raise ToolError("文档正文超过摄取预算", code="resource_limit")
         if "\0" in text:
@@ -115,43 +147,51 @@ class RagApplication:
         title = title if title is not None else source
         media_type = media_type or ("text/markdown" if source.lower().endswith(".md") else "text/plain")
         checksum = sha256(text.encode("utf-8")).hexdigest()
+        revision = self.repository.revision(source)
         previous = self.repository.get(source)
-        if (
+        unchanged = (
             previous
             and previous.source.checksum == checksum
             and previous.fingerprint == self.fingerprint
             and previous.source.metadata == metadata
             and previous.source.title == title
             and previous.source.media_type == media_type
-        ):
-            return {
-                "status": "unchanged",
-                "document_id": previous.source.id,
-                "chunks": len(previous.chunks),
-            }
+        )
         document = SourceDocument(
             id=stable_id("doc", source),
             source_uri=source,
             title=title,
             checksum=checksum,
             media_type=media_type,
-            metadata=metadata,
+            metadata=metadata.copy(),
         )
+        action: Literal["create", "update", "unchanged"] = "unchanged" if unchanged else "update" if previous else "create"
+        return IngestionPlan(document, text, revision, self.fingerprint, action,
+                             len(previous.chunks) if previous else 0)
+
+    def commit_ingestion(self, plan: IngestionPlan) -> IngestResult:
+        """按已确认的计划构建索引，在发布事务内检查并发修改。"""
+        document, text = plan.document, plan.text
+        if plan.pipeline != self.fingerprint or self.repository.revision(document.source_uri) != plan.revision:
+            raise ToolError("索引或处理配置已变化，请重新准备", code="version_conflict")
+        if plan.action == "unchanged":
+            return {"status": "unchanged", "document_id": document.id, "chunks": plan.previous_chunks}
         chunks = self._split(document, text)
-        self._check_ingestion_budget(chunks, source)
+        self._check_ingestion_budget(chunks, document.source_uri)
         chunks = self._contextualize(document, text, chunks)
         vectors = self._embed(chunks)
         snapshot = IndexSnapshot(
             source=document,
             chunks=chunks,
             vectors=vectors,
-            fingerprint=self.fingerprint,
+            fingerprint=plan.pipeline,
         )
-        self.repository.publish(snapshot)
+        check_execution()
+        self.repository.publish(snapshot, expected_revision=plan.revision)
         return {
             "status": "indexed",
             "document_id": document.id,
-            "checksum": checksum,
+            "checksum": document.checksum,
             "chunks": len(chunks),
             "mode": "hybrid" if vectors else "bm25",
         }

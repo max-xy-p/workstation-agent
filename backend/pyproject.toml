@@ -65,6 +65,10 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/rag/repository.py",
+    "src/workstation_agent/tools/approval.py",
+    "src/workstation_agent/tools/workflow.py",
+    "tests/integration/test_business_workflows.py",
     "src/workstation_agent/application/sources.py",
     "src/workstation_agent/domain/sources.py",
     "tests/unit/test_answer_sources.py",

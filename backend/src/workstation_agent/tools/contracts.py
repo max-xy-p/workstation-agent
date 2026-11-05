@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -77,6 +78,23 @@ class ToolArguments(BaseModel):
 
     # 严格类型、禁止多余参数，校验后不可重新赋值字段。
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCall:
+    """保存只读准备得到的摘要及提交操作，正文留在本次调用内。"""
+
+    summary: dict[str, JsonValue]
+    fingerprint: str
+    commit: Callable[[], str]
+    unchanged: bool = False
+
+
+@runtime_checkable
+class PreparingTool(Protocol):
+    """只读准备与写入分开，使审批能绑定实际将提交的计划。"""
+
+    def prepare_call(self, arguments: dict[str, JsonValue]) -> PreparedCall: ...
 
 
 @runtime_checkable

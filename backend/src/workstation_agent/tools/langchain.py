@@ -45,9 +45,12 @@ def make_langchain_tool(
         result = await invoke(arguments)
         if result.error_code == "permission_required":
             grant = ToolGrant.for_call(definition.name, arguments, context=definition.approval_context)
-            request = ApprovalRequest(
+            request = result.approval or ApprovalRequest(
                 name=definition.name, arguments=arguments, fingerprint=grant.fingerprint
             )
+            if request.name != definition.name:
+                raise ValueError("审批工具与当前调用不匹配")
+            grant = ToolGrant(name=request.name, fingerprint=request.fingerprint)
             # 官方中断从工具节点恢复；只在用户批准该指纹后临时授予本次调用。
             decision = ApprovalDecision.model_validate(interrupt(request.model_dump()))
             if decision.fingerprint != grant.fingerprint:

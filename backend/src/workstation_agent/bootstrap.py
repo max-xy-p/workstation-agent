@@ -103,7 +103,7 @@ class MemoryApprovalPolicy(AllowSafeReadsPolicy):
             super().allows(tool_name, permission, arguments)
             or (
                 self.write
-                and tool_name in {"remember_memory", "update_memory"}
+                and tool_name in {"remember_memory", "update_memory", "save_memory_batch"}
                 and permission == PermissionLevel.CONTROLLED_WRITE
             )
             or (
@@ -305,7 +305,7 @@ def build_tool_application(
                                 knowledge_retrieval=knowledge_retrieval, chunking=chunking)
     tools.extend(
         (
-            IngestDocumentTool(settings.workspace, rag),
+            IngestDocumentTool(settings.workspace, rag, secrets=settings.secrets),
             SearchDocumentsTool(rag),
             DeleteDocumentTool(settings.workspace, rag),
             RagStatusTool(rag),
@@ -425,6 +425,7 @@ async def build_agent_application(
             "get_memory",
             "list_memories",
             "search_memory",
+            "save_memory_batch",
         }
         tools = [tool for tool in tools if tool.name not in names]
         if memory:

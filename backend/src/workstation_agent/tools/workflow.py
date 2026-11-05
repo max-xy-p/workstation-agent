@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
 from ..safety.permissions import PermissionRequired
+from .approval import PlannedApprovalRequired
 from .contracts import ToolRequest
 from .executor import ToolExecutor, ToolResult
 
 
-class ToolWorkflowState(TypedDict, total=False):
+class ToolWorkflowState(TypedDict):
     """保存单次工具调用在图中传递的请求和结果。"""
 
     # 要调用的工具名称。
@@ -22,9 +23,9 @@ class ToolWorkflowState(TypedDict, total=False):
     # 未经请求校验的原始参数。
     raw_arguments: object
     # 通过格式校验的调用请求。
-    request: ToolRequest
+    request: NotRequired[ToolRequest]
     # 最终工具结果，也用于结束失败请求。
-    result: ToolResult
+    result: NotRequired[ToolResult]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,9 +81,13 @@ class ToolWorkflow:
 
     def _execute_tool(self, state: ToolWorkflowState) -> dict[str, ToolResult]:
         """调用执行器，并将审批要求转换成工具结果。"""
-        request = state["request"]
+        request = state.get("request")
+        assert request is not None
         try:
             result = self.executor.execute(request.name, request.arguments)
+        except PlannedApprovalRequired as exc:
+            result = ToolResult(request.name, "操作计划需要审批", False, "操作计划需要审批",
+                                "permission_required", exc.request)
         except PermissionRequired:
             result = ToolResult(
                 tool_name=request.name,

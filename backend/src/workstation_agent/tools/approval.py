@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue
+from ..safety import PermissionRequired
 
 
 class ApprovalRequest(BaseModel):
@@ -20,3 +21,11 @@ class ApprovalDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["approve", "reject"]
     fingerprint: str
+
+
+class PlannedApprovalRequired(PermissionRequired):
+    """将已核对计划的摘要和审批指纹交给现有中断入口。"""
+
+    def __init__(self, request: ApprovalRequest) -> None:
+        super().__init__("操作计划需要审批")
+        self.request: ApprovalRequest = request

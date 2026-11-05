@@ -60,12 +60,12 @@ def build_mcp_server(application: ToolApplication) -> Server:
     ) -> CallToolResult:
         # 在线程中调用应用入口，避免文件读取阻塞 HTTP 请求处理。
         # 审批通过 MCP 元数据传递，不能放入模型可填写的工具参数。
-        # HTTP 入口已校验服务令牌；授权仍绑定指定工具与完整原始参数。
+        # 服务端执行器核对参数及计划指纹，传输层只检查授权对应的工具。
         meta = params.meta or {}
         grant_data = meta.get("workstation_approval")
         grant = ToolGrant.model_validate(grant_data) if grant_data is not None else None
         arguments = params.arguments or {}
-        if grant is not None and grant != ToolGrant.for_call(params.name, arguments):
+        if grant is not None and grant.name != params.name:
             raise ValueError("审批范围与工具请求不符")
         deadline = meta.get("workstation_deadline")
         control = ExecutionControl(float(deadline)) if isinstance(deadline, int | float) else None

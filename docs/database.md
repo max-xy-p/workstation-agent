@@ -61,6 +61,7 @@ uv run workstation-agent doctor --database
 - 历史 001–004 是 SQLite 结构记录，不用于 PostgreSQL 初始化。
 - `008_answer_sources.sql` 为消息增加检索来源片段。升级后先运行 `uv run workstation-agent init-db`；
   旧消息保留空来源列表，不用当前索引猜测旧回答依据，新消息开始保存来源。
+- `009_rag_revisions.sql` 增加索引发布和删除的版本记录。已有索引从版本零开始，无需重建。
 - 检查点迁移由官方组件在 `workstation_checkpoints.checkpoint_migrations` 中独立管理。
 
 不自动导入或删除旧 SQLite 文件。保留旧文件作备份后，按需要重建：

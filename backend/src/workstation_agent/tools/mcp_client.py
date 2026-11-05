@@ -69,6 +69,9 @@ async def local_service_tools(settings: Settings) -> AsyncIterator[list[Structur
         for definition in catalog:
             permission = (PermissionLevel.SAFE_READ if definition.annotations and definition.annotations.read_only_hint
                           else PermissionLevel.CONTROLLED_WRITE)
+            if definition.name in {"ingest_document", "save_memory_batch"}:
+                # 内部服务先读取摄取计划，再校验计划专属写入授权。客户端只授权传输这次请求。
+                permission = PermissionLevel.SAFE_READ
             remote = RemoteMCPTool(client, definition, definition.name, permission, internal_service=True,
                                    secrets=settings.secrets)
             tools.append(make_langchain_tool(remote.definition, remote_invocation(remote, settings.tool_output_chars)))

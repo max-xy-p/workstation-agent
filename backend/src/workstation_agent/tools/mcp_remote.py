@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from ..memory.service import redact
 from ..safety import AllowSafeReadsPolicy, PermissionLevel, PermissionRequired
+from .approval import PlannedApprovalRequired
 from .contracts import AsyncTool, ToolDefinition, ToolError
 from .execution import EXECUTION, GRANT
 from .executor import ToolExecutor, ToolResult
@@ -110,6 +111,8 @@ class RemoteMCPTool:
             if result.tool_name != self.remote_name or response.is_error != (not result.success):
                 raise ToolError("内部 MCP 返回不一致的结果", code="invalid_output")
             if not result.success:
+                if result.error_code == "permission_required" and result.approval is not None:
+                    raise PlannedApprovalRequired(result.approval)
                 raise ToolError(redact(result.error or "远程工具失败", self.secrets),
                                 code=result.error_code or "remote_tool_failed")
             return redact(result.content, self.secrets)
