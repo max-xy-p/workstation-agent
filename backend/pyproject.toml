@@ -28,7 +28,7 @@ dependencies = [
 workstation-agent = "workstation_agent.cli:main"
 
 [project.optional-dependencies]
-workstation = ["workstation-api-client==5.1.0"]
+workstation = ["workstation-api-client==5.3.0"]
 
 [tool.uv.sources]
 workstation-api-client = { path = "../../../workstation/clients/python" }
@@ -55,7 +55,7 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pyright>=1.1.414",
-    "workstation-api-client==5.1.0",
+    "workstation-api-client==5.3.0",
 ]
 
 [tool.pyright]
@@ -65,6 +65,9 @@ venv = ".venv"
 extraPaths = ["src"]
 typeCheckingMode = "basic"
 include = [
+    "src/workstation_agent/tools/discovery.py",
+    "src/workstation_agent/agent/tool_discovery.py",
+    "tests/integration/test_tool_discovery.py",
     "src/workstation_agent/rag/repository.py",
     "src/workstation_agent/tools/approval.py",
     "src/workstation_agent/tools/workflow.py",
@@ -77,6 +80,7 @@ include = [
     "tests/workstation_support.py",
     "tests/integration/test_workstation_notes.py",
     "tests/integration/test_workstation_pipeline.py",
+    "tests/integration/test_workstation_server.py",
     "tests/unit/test_workstation_config.py",
     "src/workstation_agent/tools/mcp_config.py",
     "src/workstation_agent/tools/mcp_remote.py",

@@ -14,7 +14,7 @@ from ...tools.execution import check_execution, execute_blocking
 from ...tools.executor import ToolExecutor
 from ...tools.mcp_remote import MCPResultTool, RemoteMCPTool
 from ...tools.registry import ToolRegistry
-from .config import WorkstationNotesConfig
+from .config import WORKSTATION_SDK_VERSION, WorkstationNotesConfig
 
 
 class InspectNoteArguments(ToolArguments):
@@ -40,7 +40,8 @@ class WorkstationNoteSource:
         self.max_file_bytes = max_file_bytes
         self.secrets = secrets
         self.approval_context = sha256(
-            f"workstation-sdk-5:{binding.server}:{binding.workspace_id}:{remote.definition.approval_context}".encode()
+            f"workstation-sdk-{WORKSTATION_SDK_VERSION}:{binding.server}:{binding.workspace_id}:"
+            f"{remote.definition.approval_context}".encode()
         ).hexdigest()
         if remote.permission != PermissionLevel.SAFE_READ:
             raise ValueError("工作台笔记读取工具必须明确配置为 read")
@@ -64,7 +65,7 @@ class WorkstationNoteSource:
         try:
             note = NoteDetailResponse.from_dict(payload)
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
-            raise ToolError("笔记结果不符合工作台 SDK 5.1.0 契约", code="invalid_note") from None
+            raise ToolError(f"笔记结果不符合工作台 SDK {WORKSTATION_SDK_VERSION} 契约", code="invalid_note") from None
         if (type(note.id) is not int or note.id != note_id or type(note.version) is not int or note.version < 1
                 or not isinstance(note.title, str) or not note.title.strip() or len(note.title) > 200
                 or not isinstance(note.content, str) or not note.content or "\0" in note.content

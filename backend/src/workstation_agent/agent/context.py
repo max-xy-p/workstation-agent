@@ -29,6 +29,7 @@ from ..context.state import ContextAgentState, ContextRuntime
 from ..context.status import collect_results, initialize, invalidate_memory_sources
 from ..models.summary import BoundedSummaryModel
 from .prompts import SYSTEM_PROMPT
+from .tool_discovery import ToolDiscoveryMiddleware
 
 
 class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
@@ -42,10 +43,13 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
         tools: list[BaseTool],
         settings: ContextSettings,
         summary_model: BaseChatModel | None = None,
+        *,
+        discovery: ToolDiscoveryMiddleware | None = None,
     ) -> None:
         self.model = model
         self.available_tools = tools
         self.settings = settings
+        self.discovery: ToolDiscoveryMiddleware | None = discovery
         self.summary: SummarizationMiddleware[None, ContextRuntime] | None = None
         if summary_model is not None:
             bounded = BoundedSummaryModel(
@@ -195,10 +199,14 @@ class ContextMiddleware(AgentMiddleware[ContextAgentState, ContextRuntime]):
     ) -> ContextAgentState | None:
         if self.summary is None or context.summary_calls or len(state["messages"]) < 4:
             return None
+        tools = self.available_tools
+        if self.discovery is not None:
+            names = self.discovery.available([tool.name for tool in tools], state.get("discovered_tools"), context)
+            tools = [tool for tool in tools if tool.name in names]
         request = ModelRequest(
             model=self.model,
             messages=state["messages"],
-            tools=list(self.available_tools),
+            tools=list(tools),
             system_message=SystemMessage(SYSTEM_PROMPT),
             state=state,
             runtime=runtime,

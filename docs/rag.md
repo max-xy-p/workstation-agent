@@ -43,7 +43,7 @@ uv run workstation-agent run "查文档，说明工具由谁检查权限" --tran
 ```powershell
 uv sync --extra workstation
 $env:WORKSTATION_AGENT_MCP_SERVERS = '[{"name":"workstation","url":"http://127.0.0.1:8000/mcp","tools":{"get_note":"read"}}]'
-$env:WORKSTATION_AGENT_WORKSTATION_NOTES = '{"server":"workstation","workspace_id":11}'
+$env:WORKSTATION_AGENT_WORKSTATION_NOTES = '{"server":"workstation","workspace_id":11,"expose_get_note":false}'
 uv run workstation-agent doctor
 ```
 
@@ -51,8 +51,11 @@ MCP 连接和认证配置见 [外部 MCP 接入](agent.md#接入外部-mcp-服�
 [开发指南](development.md#工作台-sdk-与笔记适配)。默认不启用此来源，不要求基础运行环境安装工作台 SDK。
 生产安装可使用 `uv sync --no-dev --extra workstation`；开发依赖包含同版 SDK，用于验证生成模型。
 
-需要 SDK 5.1.0 的笔记详情结构，以及参数明确包含 `workspace_id`、`note_id` 的 `get_note` MCP 工具。
+需要 SDK 5.3.0 的笔记详情结构，以及参数明确包含 `workspace_id`、`note_id` 的 `get_note` MCP 工具。
+`expose_get_note` 默认开启。设为 `false` 时，仍须在 MCP 白名单中将 `get_note` 标为 `read`，供查看来源和摄取工具内部使用。
+模型只看到查看来源和摄取两个入口。需要按标题找笔记时，可在白名单加入只读的 `list_notes`。
 旧的单参数 MCP 工具或缺少版本的响应会被拒绝，不自动猜测工作区、填充版本或适配旧字段。
+升级 SDK 前等待审批的工作台笔记摄取需要重新发起，审批指纹会核对 SDK 契约版本。
 `doctor` 只检查绑定和 SDK 安装状态；启动 Agent 时才连接服务并核对工具 schema。
 
 在会话中发送“将工作台笔记 42 加入知识库”，Agent 应先调用 `inspect_workstation_note(note_id=42)` 取得版本，

@@ -20,10 +20,12 @@ from ..context.budget import resolve_settings
 from ..context.config import ContextSettings
 from ..context.state import ContextAgentState, ContextRuntime
 from ..tools.task_status import task_status_tool
+from ..tools.discovery import FIND_TOOLS, ToolDiscovery
 from .context import ContextMiddleware
 from .prompts import SYSTEM_PROMPT
 from .rag_guard import RagSearchGuard
 from .run_boundary import RunBoundary
+from .tool_discovery import ToolDiscoveryMiddleware
 
 
 def build_agent(
@@ -36,6 +38,7 @@ def build_agent(
     checkpointer: BaseCheckpointSaver | None = None,
     summary_model: BaseChatModel | None = None,
     context_settings: ContextSettings | None = None,
+    discovery: ToolDiscovery | None = None,
 ) -> CompiledStateGraph[AgentState, ContextRuntime, InputAgentState, OutputAgentState]:
     """创建官方循环；所有运行都经过完整上下文预算，未知模型必须配置容量。"""
     settings = resolve_settings(context_settings or ContextSettings(), model)
@@ -43,7 +46,12 @@ def build_agent(
     if any(tool.name == "update_task_status" for tool in tools):
         raise ValueError("update_task_status 是 Agent 内部保留的工具名称")
     tools = [*tools, task_status_tool()]
-    context_middleware = ContextMiddleware(model, tools, settings, summary_model)
+    if discovery and discovery.entries:
+        if any(tool.name == FIND_TOOLS for tool in tools):
+            raise ValueError("find_tools 是 Agent 内部保留的工具名称")
+        tools.append(discovery.as_tool())
+    selector = ToolDiscoveryMiddleware(frozenset(discovery.entries)) if discovery and discovery.entries else None
+    context_middleware = ContextMiddleware(model, tools, settings, summary_model, discovery=selector)
     # 官方工厂把多种中间件状态合并为运行时 schema；只有此组装边界使用 Any 描述合并状态。
     middleware: list[AgentMiddleware[Any, ContextRuntime]] = [
         RunBoundary(),
@@ -60,8 +68,10 @@ def build_agent(
             exit_behavior="error",
         ),
         RagSearchGuard(),
-        context_middleware,
     ]
+    if selector is not None:
+        middleware.append(selector)
+    middleware.append(context_middleware)
 
     return create_agent(
         model=model,

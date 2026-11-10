@@ -111,13 +111,15 @@ HTTP 服务如需 Bearer 认证，增加 `"token_env":"MY_MCP_TOKEN"`，再通�
 仅本机地址允许 HTTP，其他地址必须 HTTPS；不接受 URL 凭据或查询参数，不继承系统代理、不跟随 HTTP 重定向。
 工作台后端的 OAuth 凭据仍由工作台 MCP Server 管理，Agent 不代替它登录业务服务。
 
-stdio 服务可配置 `{"name":"workstation","transport":"stdio","command":"uv","args":["--directory","你的服务目录","run","workstation-mcp-server"],"tools":{"get_note":"read"}}`。
+stdio 服务可配置 `{"name":"workstation","transport":"stdio","command":"uv","args":["--directory","你的服务目录","run","workstation-mcp-server"],"env":["WORKSTATION_BASE_URL","WORKSTATION_TOKEN_URL","WORKSTATION_CLIENT_ID"],"secret_env":["WORKSTATION_CLIENT_SECRET"],"tools":{"get_note":"read","list_notes":"read"}}`。
+将服务目录替换成 Workstation MCP Server 的检出路径，在启动 Agent 的终端设置列出的环境变量。
 `command` 和 `args` 是可信启动配置，不接受模型修改，不经过 shell；普通环境变量用 `env` 数组列出名称，
 密钥变量用 `secret_env` 数组列出名称。两者都会传给子进程，只有密钥值加入脱敏范围，避免把普通项目编号等内容误删。
 `cwd` 默认 `.`，必须是 Agent 工作区内的目录；带路径的 `command` 也限制在工作区，普通命令名从 PATH 查找。
 子进程错误日志不直接展示，避免凭据通过服务日志泄漏；启动异常需在服务自己的环境中排查。
 
-工具以 `服务名__工具名` 暴露给模型。只有 `tools` 白名单中的工具会被加载：
+工具以 `服务名__工具名` 暴露给模型。按使用场景配置 `tools` 白名单，例如笔记检索只需笔记相关读取权限，项目维护可以使用另一份启动配置。
+工作台笔记适配还可以将 `get_note` 保留给摄取流程内部调用。权限值决定调用行为：
 
 | 权限值 | 调用行为 |
 | --- | --- |
@@ -136,7 +138,24 @@ stdio 服务可配置 `{"name":"workstation","transport":"stdio","command":"uv",
 读取结果会进入配置的模型请求；外部取消依赖服务响应 MCP 取消，不能保证已发生的操作被撤销。
 
 工作台 SDK 专用适配已提供查看来源及审批摄取两个工具，配置方法见 [工作台笔记摄取](rag.md#工作台笔记摄取)。
-该连接要求新版 `get_note` 契约，工作台 MCP 需要单独更新；不进行后台自动同步。
+该连接已通过 SDK 5.3.0 的 MCP 子进程联调。MCP 服务独立部署，笔记更新由用户发起摄取。
+
+### 分层发现工具
+
+在工作台 MCP 连接中加入 `"tool_discovery":"workstation"`，启用按业务域发现工具。以下示例只授权任务查询和关联写入：
+
+```powershell
+$env:WORKSTATION_AGENT_MCP_SERVERS = '[{"name":"workstation","url":"http://127.0.0.1:8000/mcp","tool_discovery":"workstation","tools":{"get_task":"read","link_task_issue":"write"}}]'
+```
+
+重启 Agent 后，模型可以用 `find_tools()` 查看可用的一级分组，也可以直接调用
+`find_tools(group="tasks.issue_sources", query="关联已有 issue")`。有查询时在该分组及子组内查找。
+仅指定分组时返回直接子组和该层的工具摘要。未配置 `tool_discovery` 的连接继续直接提供白名单工具。
+
+每次查找最多返回五个候选，每次 Run 最多保留八个已发现工具，优先保留最近发现的工具。
+候选的完整参数定义从下一轮开始提供，猜测名称或并行调用尚未发现的工具会被拒绝。
+发现结果跟随 Run 恢复审批，新任务重新发现。原工具仍根据白名单权限校验参数并申请审批。
+常用的笔记摄取和查看来源属于应用入口，启用发现时仍可直接使用。
 
 ## 本机 MCP 服务
 

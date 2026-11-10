@@ -35,6 +35,7 @@ class MCPServerConfig(BaseModel):
     secret_env: list[str] = Field(default_factory=list, max_length=64)
     cwd: str = "."
     tools: dict[str, ToolPermission] = Field(min_length=1, max_length=256)
+    tool_discovery: Literal["workstation"] | None = None
 
     @field_validator("tools")
     @classmethod

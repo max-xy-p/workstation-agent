@@ -430,6 +430,14 @@ async def build_agent_application(
         tools = [tool for tool in tools if tool.name not in names]
         if memory:
             tools.extend(local_tools(memory.tools))
+        discovery = None
+        profiles = [server for server in settings.external_mcp_servers if server.tool_discovery == "workstation"]
+        if profiles:
+            from .integrations.workstation.discovery import WORKSTATION_GROUPS, workstation_discovery_entries
+            from .tools.discovery import ToolDiscovery
+
+            entries = {name: entry for server in profiles for name, entry in workstation_discovery_entries(server).items()}
+            discovery = ToolDiscovery(tools, entries, WORKSTATION_GROUPS)
         graph = build_agent(
             model,
             tools,
@@ -439,6 +447,7 @@ async def build_agent_application(
             checkpointer=checkpointer,
             summary_model=summary_model,
             context_settings=settings.context,
+            discovery=discovery,
         )
         return AgentApplication(
             graph,
@@ -474,7 +483,12 @@ async def build_agent_application(
             return workstation_note_tools(binding, remote, build_document_application(settings, approve_write=True),
                                           max_file_bytes=settings.rag.max_file_bytes, secrets=settings.secrets)
 
-        tools.extend(await stack.enter_async_context(external_tools(settings, extension=source_tools)))
+        binding = settings.workstation_notes
+        hidden = (
+            frozenset({public_tool_name(binding.server, "get_note")})
+            if binding and not binding.expose_get_note else frozenset()
+        )
+        tools.extend(await stack.enter_async_context(external_tools(settings, extension=source_tools, hidden=hidden)))
         names = [tool.name for tool in tools]
         if len(names) != len(set(names)):
             raise ValueError("本机与外部 MCP 工具名称冲突")

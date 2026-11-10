@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+WORKSTATION_SDK_VERSION = "5.3.0"
+
 
 class WorkstationNotesConfig(BaseModel):
     """把笔记摄取工具固定到一个已配置的 MCP 服务和业务工作区，默认不启用。"""
@@ -14,6 +16,7 @@ class WorkstationNotesConfig(BaseModel):
     server: str = Field(pattern=r"^[a-z][a-z0-9_]{0,15}$")
     workspace_id: int = Field(gt=0)
     web_url: str | None = Field(default=None, max_length=2048)
+    expose_get_note: bool = True
 
     @field_validator("web_url")
     @classmethod

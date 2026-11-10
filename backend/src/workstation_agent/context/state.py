@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Annotated, Literal, NotRequired, TypedDict
 
 from langchain.agents import AgentState
 from pydantic import JsonValue, TypeAdapter
@@ -25,12 +25,26 @@ class RunControlState(TypedDict):
     closed: bool
 
 
+class DiscoveredTools(TypedDict):
+    """仅在所属 Run 生效的模型工具选择。"""
+
+    run_id: str
+    names: list[str]
+
+
+def merge_discovered_tools(previous: DiscoveredTools, incoming: DiscoveredTools) -> DiscoveredTools:
+    """合并并行发现结果，优先保留新发现的工具，最多保留八项。"""
+    older = previous["names"] if previous.get("run_id") == incoming["run_id"] else []
+    return {"run_id": incoming["run_id"], "names": list(dict.fromkeys([*incoming["names"], *older]))[:8]}
+
+
 class ContextAgentState(AgentState):
     """为官方 AgentState 增加版本化任务状态，不建立第二套运行状态机。"""
 
     task_board: NotRequired[TaskBoard]
     run_control: NotRequired[RunControlState]
     summary_calls: NotRequired[int]
+    discovered_tools: NotRequired[Annotated[DiscoveredTools, merge_discovered_tools]]
 
 
 class ContextUsage(TypedDict):

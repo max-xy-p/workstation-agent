@@ -115,8 +115,11 @@ async def _external_client(stack: AsyncExitStack, server: MCPServerConfig, works
 
 
 @asynccontextmanager
-async def external_tools(settings: Settings, *, extension: MCPToolExtension | None = None) -> AsyncIterator[list[StructuredTool]]:
-    """只适配配置白名单中的工具，远端注解不会降低本地权限，退出时关闭全部连接。"""
+async def external_tools(
+    settings: Settings, *, extension: MCPToolExtension | None = None,
+    hidden: frozenset[str] = frozenset(),
+) -> AsyncIterator[list[StructuredTool]]:
+    """连接白名单工具，内部适配器可复用不向模型暴露的工具，退出时关闭连接。"""
     stack = AsyncExitStack()
     try:
         tools: list[StructuredTool] = []
@@ -127,14 +130,18 @@ async def external_tools(settings: Settings, *, extension: MCPToolExtension | No
                 catalog = {tool.name: tool for tool in await _catalog(client)}
                 if set(server.tools) - catalog.keys():
                     raise ValueError("MCP 配置中的工具不在远端目录中")
+                # 可见性单独由 Agent 检查，审批指纹继续绑定连接、权限与远端工具契约。
+                approval_config = server.model_dump_json(exclude={"tool_discovery"})
                 for name, permission in server.tools.items():
                     remote = RemoteMCPTool(client, catalog[name], public_tool_name(server.name, name), PERMISSIONS[permission],
                                            secrets=(*credentials, *settings.secrets), approval_context=sha256(
-                                               (server.model_dump_json() + catalog[name].model_dump_json()).encode()
+                                               (approval_config + catalog[name].model_dump_json()).encode()
                                            ).hexdigest())
                     if remote.definition.name in remotes:
                         raise ValueError("MCP 工具公开名称冲突")
                     remotes[remote.definition.name] = remote
+                    if remote.definition.name in hidden:
+                        continue
                     tools.append(make_langchain_tool(remote.definition, remote_invocation(remote, settings.tool_output_chars)))
             if extension is not None:
                 tools.extend(make_langchain_tool(tool.definition, remote_invocation(tool, settings.tool_output_chars))

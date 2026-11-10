@@ -102,7 +102,7 @@ React 管理交互，Vite 提供开发代理和构建；Zod 校验网络边界�
 ## 工作台 SDK 与笔记适配
 
 `integrations/workstation/` 负责工作台来源绑定、SDK 结果解析和摄取工具，不改变 Agent 执行图或 RAG 管线。
-它直接使用 `workstation-api-client==5.1.0` 的 `NoteDetailResponse`，不复制或继承笔记 DTO，不调用 SDK 的 HTTP 方法。
+它直接使用 `workstation-api-client==5.3.0` 的 `NoteDetailResponse`，不复制或继承笔记 DTO，不调用 SDK 的 HTTP 方法。
 SDK 模型由工作台 OpenAPI 生成；原始返回仍需检查身份、版本、正文类型及大小，不能把生成代码的类型注解当成运行时校验。
 
 此 SDK 作为 `workstation` 可选依赖安装，开发组也包含同版 SDK 以运行集成测试。
@@ -115,6 +115,16 @@ SDK 增加一个 Python 包；它的 attrs、HTTP 客户端依赖已有，无需
 供来源适配读取；模型侧仍使用有长度限制的文本结果，避免把被截断或脱敏改写的文本当作来源原文。
 笔记字段到通用文档输入的映射属于具体来源规则，官方 MCP 客户端和 RAG 组件不提供这一工作台映射，故只在适配模块实现。
 
+真实 MCP Server 的联调用例需要先在相邻仓库安装依赖。然后在 Agent 的 `backend/` 配置专用 PostgreSQL 并运行：
+
+```powershell
+$env:WORKSTATION_MCP_TEST_DIR = (Resolve-Path ../../workstation-mcp-server).Path
+uv run python -m unittest tests.integration.test_workstation_server -v
+```
+
+用例通过 stdio 启动真实服务，使用本机 HTTP 夹具提供认证和笔记 API，并验证原文进入 PostgreSQL 后可被检索。
+未设置检出目录时跳过该项。此测试无需个人工作台凭据。
+
 ## 回答引用的扩展边界
 
 回答引用复用官方 `ToolMessage` 消息和 [react-markdown 的 components 扩展](https://github.com/remarkjs/react-markdown#appendix-b-components)。
@@ -124,6 +134,12 @@ SDK 增加一个 Python 包；它的 attrs、HTTP 客户端依赖已有，无需
 可点击引用仅由 RAG 回答检索启用，并按带链接的最终文本计算预算；普通 Context 检索使用紧凑引用，避免额外链接挤占证据空间。
 
 ## 添加能力
+
+工作台工具的业务归属和别名维护在 `integrations/workstation/discovery.py`。
+配置启用发现后，目录只从已授权并实际注册的工具中生成。新增远端工具须补充分组才能加入发现白名单。
+查找复用现有 BM25 检索，模型请求筛选使用 [LangChain 模型请求中间件](https://docs.langchain.com/oss/python/langchain/middleware/custom)。
+中间件本身不提供工作台的业务层级和授权规则，因此项目维护分组表，并通过官方工具状态更新保存当前 Run 的选择。
+筛选在上下文计量前执行，工具执行中间件也检查发现状态，防止猜测隐藏工具名。
 
 业务工作流通过普通类型化方法准备计划和提交，等待用户审批时复用 [LangGraph 中断](https://docs.langchain.com/oss/python/langgraph/interrupts)。
 LangGraph 恢复时会从节点开头重跑，因此准备阶段只读取资料。工具执行器根据重新准备的计划核对审批指纹，存储事务校验当前版本。

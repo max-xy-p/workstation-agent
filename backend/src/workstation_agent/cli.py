@@ -8,7 +8,7 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import Literal
 
 from pydantic import JsonValue, TypeAdapter
@@ -20,6 +20,7 @@ from .config import Settings
 from .context.config import ContextConfigurationError
 from .domain.task_status import TaskBoard
 from .domain.runs import Run
+from .integrations.workstation.config import WORKSTATION_SDK_VERSION
 from .tools import ToolError, ToolResult
 
 _RESULT_ADAPTER = TypeAdapter(ToolResult)
@@ -192,12 +193,23 @@ def _doctor(args: argparse.Namespace, settings: Settings) -> int:
             configured = False
         print(f"MCP {server.name}: {server.transport}; allowed tools: {len(server.tools)}; credential configured: {configured}")
         ready = ready and configured
+        if server.tool_discovery == "workstation":
+            from .integrations.workstation.discovery import workstation_discovery_entries
+
+            try:
+                workstation_discovery_entries(server)
+                grouped = True
+            except ValueError:
+                grouped = False
+            print(f"MCP {server.name}: Workstation tool groups configured: {grouped}")
+            ready = ready and grouped
     if settings.workstation_notes is not None:
         try:
-            sdk_ready = version("workstation-api-client") == "5.1.0"
-        except Exception:
+            sdk_ready = version("workstation-api-client") == WORKSTATION_SDK_VERSION
+        except PackageNotFoundError:
             sdk_ready = False
-        print(f"Workstation note ingestion: enabled; SDK 5.1.0 available: {sdk_ready}")
+        print(f"Workstation note ingestion: enabled; SDK {WORKSTATION_SDK_VERSION} available: {sdk_ready}")
+        print(f"Workstation raw get_note visible to model: {settings.workstation_notes.expose_get_note}")
         print(f"Workstation source links configured: {settings.workstation_notes.web_url is not None}")
         ready = ready and sdk_ready
     ready = _doctor_rag(args, settings) and ready
